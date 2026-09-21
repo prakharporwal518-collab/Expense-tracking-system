@@ -1,0 +1,20 @@
+{
+  "name": "fintrack-expense-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FinTrack - an expense tracking system with forecasting, anomaly detection, subscription discovery and debt settlement.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning src/server.js",
+    "dev": "node --no-warnings=ExperimentalWarning --watch src/server.js",
+    "seed": "node --no-warnings=ExperimentalWarning src/db/seed.js",
+    "test": "node --no-warnings=ExperimentalWarning --test tests/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
