@@ -26,8 +26,11 @@ npm test        # 64 unit + integration tests
 npm run dev     # auto-restart on file changes
 ```
 
-Requires **Node 22.5+** (it uses the built-in `node:sqlite`, so there is no native
-module to compile and nothing to install beyond Express).
+Requires **Node 22.13+**. It uses the built-in `node:sqlite`, so there is no native
+module to compile and nothing to install beyond Express — but that module stayed
+behind `--experimental-sqlite` until 22.13, so earlier 22.x releases cannot run it.
+The repo pins a known-good version in `.node-version`, and the app refuses to start
+on anything older with a message explaining the fix.
 
 ---
 
@@ -191,6 +194,23 @@ Copy `.env.example` to `.env`. Every value has a safe development default.
 | `TOKEN_TTL_SECONDS` | `604800` | 7 days |
 | `RATE_MAX` / `RATE_AUTH_MAX` | `300` / `20` | Per window |
 | `LOG_LEVEL` | `debug` (dev) | |
+
+### Deploying to Render
+
+| Setting | Value |
+|---|---|
+| Build Command | `npm install` |
+| Start Command | `npm start` |
+| Health Check Path | `/api/health` |
+| `NODE_VERSION` | `22.22.2` — or omit it and let `.node-version` apply |
+| `JWT_SECRET` | a long random string (**required**; the app refuses to start without it in production) |
+| `DB_FILE` | `/var/data/fintrack.db` |
+
+Do **not** set `PORT` or `HOST`; Render provides `PORT` and the app already binds `0.0.0.0`.
+
+SQLite writes to the local filesystem, which is ephemeral on Render. Without an
+attached Disk every deploy resets all data — add one (Mount Path `/var/data`) and point
+`DB_FILE` at it, or accept that the instance forgets everything on restart.
 
 ---
 

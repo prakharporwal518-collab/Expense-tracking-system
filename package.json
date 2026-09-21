@@ -5,7 +5,7 @@
   "description": "FinTrack - an expense tracking system with forecasting, anomaly detection, subscription discovery and debt settlement.",
   "type": "module",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   },
   "main": "src/server.js",
   "scripts": {
