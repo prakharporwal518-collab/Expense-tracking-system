@@ -58,5 +58,9 @@ export const config = {
     max: Number(process.env.RATE_MAX || 300),
     authMax: Number(process.env.RATE_AUTH_MAX || 20)
   },
-  logLevel: process.env.LOG_LEVEL || (isProd ? 'info' : 'debug')
+  logLevel: process.env.LOG_LEVEL || (isProd ? 'info' : 'debug'),
+  // Seeds demo data on boot, but only into a database with no accounts. Hosts
+  // with ephemeral storage wipe the disk on every deploy, and their shell is
+  // often a paid feature, so there is otherwise no way to populate a demo.
+  seedDemo: /^(1|true|yes)$/i.test(process.env.SEED_DEMO || '')
 };

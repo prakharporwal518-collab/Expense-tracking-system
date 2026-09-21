@@ -194,6 +194,7 @@ Copy `.env.example` to `.env`. Every value has a safe development default.
 | `TOKEN_TTL_SECONDS` | `604800` | 7 days |
 | `RATE_MAX` / `RATE_AUTH_MAX` | `300` / `20` | Per window |
 | `LOG_LEVEL` | `debug` (dev) | |
+| `SEED_DEMO` | unset | `true` generates demo data on boot, but only into a database with no accounts |
 
 ### Deploying to Render
 
@@ -204,13 +205,27 @@ Copy `.env.example` to `.env`. Every value has a safe development default.
 | Health Check Path | `/api/health` |
 | `NODE_VERSION` | `22.22.2` — or omit it and let `.node-version` apply |
 | `JWT_SECRET` | a long random string (**required**; the app refuses to start without it in production) |
-| `DB_FILE` | `/var/data/fintrack.db` |
+| `DB_FILE` | `/var/data/fintrack.db` — **only if a Disk is mounted there**; otherwise leave it unset |
 
 Do **not** set `PORT` or `HOST`; Render provides `PORT` and the app already binds `0.0.0.0`.
 
-SQLite writes to the local filesystem, which is ephemeral on Render. Without an
-attached Disk every deploy resets all data — add one (Mount Path `/var/data`) and point
-`DB_FILE` at it, or accept that the instance forgets everything on restart.
+SQLite writes to the local filesystem, which is ephemeral on Render, so there are
+two valid setups:
+
+- **With a Disk** (paid instance): add a Disk with Mount Path `/var/data` and set
+  `DB_FILE=/var/data/fintrack.db`. Data survives deploys.
+- **Without a Disk** (free instance): leave `DB_FILE` unset. It defaults to `./data`
+  inside the project, which is writable. The app runs, but every deploy or restart
+  wipes all accounts and expenses — fine for a demo, not for real records.
+
+Without a Disk the database is empty after every deploy, and Render's shell is a
+paid feature, so `npm run seed` may not be available. Set `SEED_DEMO=true` to have
+the demo data generated automatically on boot. It only ever seeds a database with no
+accounts, so it cannot overwrite a real deployment however often the process restarts.
+
+Setting `DB_FILE` to a mount that does not exist fails at startup by design rather
+than silently falling back to ephemeral storage, which would look like it was working
+while quietly losing data. The error names the path and lists both fixes.
 
 ---
 
