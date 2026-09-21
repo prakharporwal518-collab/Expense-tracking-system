@@ -194,6 +194,7 @@ Copy `.env.example` to `.env`. Every value has a safe development default.
 | `TOKEN_TTL_SECONDS` | `604800` | 7 days |
 | `RATE_MAX` / `RATE_AUTH_MAX` | `300` / `20` | Per window |
 | `LOG_LEVEL` | `debug` (dev) | |
+| `SEED_DEMO` | unset | `true` generates demo data on boot, but only into a database with no accounts |
 
 ### Deploying to Render
 
@@ -216,6 +217,11 @@ two valid setups:
 - **Without a Disk** (free instance): leave `DB_FILE` unset. It defaults to `./data`
   inside the project, which is writable. The app runs, but every deploy or restart
   wipes all accounts and expenses — fine for a demo, not for real records.
+
+Without a Disk the database is empty after every deploy, and Render's shell is a
+paid feature, so `npm run seed` may not be available. Set `SEED_DEMO=true` to have
+the demo data generated automatically on boot. It only ever seeds a database with no
+accounts, so it cannot overwrite a real deployment however often the process restarts.
 
 Setting `DB_FILE` to a mount that does not exist fails at startup by design rather
 than silently falling back to ephemeral storage, which would look like it was working

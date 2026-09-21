@@ -1,7 +1,10 @@
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { logger } from './lib/logger.js';
-import { getDb, closeDb } from './db/index.js';
+import { getDb, closeDb, get } from './db/index.js';
+// Safe to import statically: bootstrap itself is only imported after the
+// runtime check in server.js has confirmed node:sqlite is available.
+import { seed, DEMO } from './db/seed.js';
 
 /**
  * A crash in one request must not take the process down silently, and a
@@ -43,6 +46,27 @@ function installProcessGuards(server) {
   });
 }
 
+/**
+ * Populates demo data only when the database holds no accounts, so an existing
+ * deployment is never overwritten however often the process restarts.
+ */
+function maybeSeedDemo() {
+  if (!config.seedDemo) return;
+  try {
+    const existing = get('SELECT COUNT(*) AS n FROM users')?.n ?? 0;
+    if (existing > 0) {
+      logger.info('SEED_DEMO is on but the database already has accounts — leaving it untouched', { accounts: existing });
+      return;
+    }
+    logger.info('Empty database and SEED_DEMO is on — generating demo data...');
+    seed({ reset: false });
+    logger.info('Demo data ready', { login: DEMO.email, password: DEMO.password });
+  } catch (err) {
+    // A failed demo seed must never stop a real deployment from serving.
+    logger.warn('Demo seeding failed — starting with an empty database', { err: err.message });
+  }
+}
+
 function start() {
   try {
     getDb(); // fail fast if the database cannot be opened or migrated
@@ -53,6 +77,8 @@ function start() {
     else logger.error('Database initialisation failed — cannot start', { err: err.message });
     process.exit(1);
   }
+
+  maybeSeedDemo();
 
   const app = createApp();
   const server = app.listen(config.port, config.host, () => {
