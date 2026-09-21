@@ -45,9 +45,12 @@ function installProcessGuards(server) {
 
 function start() {
   try {
-    getDb(); // fail fast if migrations cannot run
+    getDb(); // fail fast if the database cannot be opened or migrated
   } catch (err) {
-    logger.error('Database initialisation failed — cannot start', { err: err.message });
+    // A StorageError already knows how to explain itself; anything else is a
+    // genuine database fault and the raw message is the most useful thing.
+    if (err.guidance) process.stderr.write(err.guidance);
+    else logger.error('Database initialisation failed — cannot start', { err: err.message });
     process.exit(1);
   }
 

@@ -4,12 +4,14 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { runMigrations } from './migrations.js';
+import { ensureDbLocation } from '../lib/storage.js';
 
 let db = null;
 
 export function getDb() {
   if (db) return db;
-  if (config.dbFile !== ':memory:') fs.mkdirSync(path.dirname(config.dbFile), { recursive: true });
+  // Fails fast with actionable guidance rather than a bare EACCES from SQLite.
+  ensureDbLocation(config.dbFile);
   db = new DatabaseSync(config.dbFile);
   // WAL keeps reads from blocking on writes; foreign keys are off by default in SQLite.
   db.exec('PRAGMA journal_mode = WAL;');
