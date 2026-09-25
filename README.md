@@ -7,7 +7,7 @@ that is out of character**, and **settles group debts in the fewest possible tra
 Built with Node.js + Express + SQLite on the back end and a dependency-free
 vanilla-JS front end. No build step, no bundler, no CDN — clone, install, run.
 
-![Node](https://img.shields.io/badge/node-%3E%3D22.5-green) ![Tests](https://img.shields.io/badge/tests-64%20passing-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/node-%3E%3D22.13-green) ![Tests](https://img.shields.io/badge/tests-76%20passing-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
 
@@ -22,7 +22,7 @@ npm start       # http://localhost:3000
 Demo login: **demo@fintrack.app** / **Demo@1234**
 
 ```bash
-npm test        # 64 unit + integration tests
+npm test        # 76 unit + integration tests
 npm run dev     # auto-restart on file changes
 ```
 
@@ -246,7 +246,7 @@ while quietly losing data. The error names the path and lists both fixes.
 npm test
 ```
 
-64 tests covering the algorithms (money splitting, NLP parsing, MAD outlier detection,
+76 tests covering the algorithms (money splitting, NLP parsing, MAD outlier detection,
 subscription clustering, Holt forecasting, debt settlement) and the API (auth, cross-account
 isolation, validation, CSV import, error shapes, security headers). The API tests run
 against a throwaway database and clean up after themselves.
