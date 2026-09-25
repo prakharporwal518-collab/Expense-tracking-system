@@ -1,4 +1,4 @@
-import { getDb, run, get, tx, closeDb } from './index.js';
+import { getDb, run, get, tx } from './index.js';
 import { hashPassword } from '../lib/password.js';
 import { DEFAULT_CATEGORIES } from './defaults.js';
 import { logger } from '../lib/logger.js';
@@ -176,18 +176,6 @@ function hashPasswordSync() {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(DEMO.password, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   return `scrypt$16384$8$1$${salt.toString('hex')}$${derived.toString('hex')}`;
-}
-
-const isDirectRun = process.argv[1] && process.argv[1].endsWith('seed.js');
-if (isDirectRun) {
-  try {
-    seed();
-    closeDb();
-    console.log(`\n  Demo login:  ${DEMO.email}  /  ${DEMO.password}\n`);
-  } catch (err) {
-    logger.error('Seeding failed', { err: err.message });
-    process.exit(1);
-  }
 }
 
 export { DEMO };

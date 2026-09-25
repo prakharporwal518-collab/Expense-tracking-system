@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node --no-warnings=ExperimentalWarning src/server.js",
     "dev": "node --no-warnings=ExperimentalWarning --watch src/server.js",
-    "seed": "node --no-warnings=ExperimentalWarning src/db/seed.js",
+    "seed": "node --no-warnings=ExperimentalWarning src/db/seed-cli.js",
     "test": "node --no-warnings=ExperimentalWarning --test tests/*.test.js"
   },
   "dependencies": {
