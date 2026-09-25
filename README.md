@@ -114,7 +114,8 @@ src/
 ├── db/
 │   ├── index.js       SQLite connection, WAL, transaction helper
 │   ├── migrations.js  Versioned, append-only, idempotent
-│   └── seed.js        Deterministic demo-data generator
+│   ├── seed.js        Deterministic demo-data generator
+│   └── seed-cli.js    `npm run seed` entry; checks the Node version first
 ├── lib/               errors · validate · money · jwt · password · csv · dates · logger
 ├── middleware/        auth · rateLimit · errorHandler · security · requestId
 ├── services/          nlp · categorizer · anomaly · recurring · forecast ·
