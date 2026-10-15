@@ -14,8 +14,17 @@ export async function requireAuth(req, _res, next) {
     const token = extractToken(req);
     if (!token) throw unauthorized('Please sign in to continue');
     const payload = verifyToken(token);
-    const user = await get('SELECT id, email, name, currency, locale, monthly_income_minor, settings_json FROM users WHERE id = ?', [payload.sub]);
+    const user = await get('SELECT id, email, name, currency, locale, monthly_income_minor, settings_json, password_changed_at FROM users WHERE id = ?', [payload.sub]);
     if (!user) throw unauthorized('Account no longer exists');
+
+    // A password reset must end sessions that existed before it, otherwise the
+    // reset does not actually lock out whoever held the old session.
+    if (user.password_changed_at) {
+      const changedAt = Math.floor(new Date(user.password_changed_at).getTime() / 1000);
+      if (Number.isFinite(changedAt) && typeof payload.iat === 'number' && payload.iat < changedAt) {
+        throw unauthorized('Your password was changed. Please sign in again.');
+      }
+    }
     req.user = plain(user);
     next();
   } catch (err) {

@@ -204,6 +204,14 @@ const MIGRATIONS = [
       ALTER TABLE expenses ADD COLUMN client_uuid {{TEXT}};
       CREATE UNIQUE INDEX idx_expenses_client_uuid ON expenses(user_id, client_uuid);
     `
+  },
+  {
+    version: 6,
+    name: 'password-change-tracking',
+    // Lets a password reset invalidate sessions issued before it: any JWT whose
+    // iat predates this timestamp is refused. Without it a stolen session would
+    // survive the very reset meant to lock the attacker out.
+    sql: `ALTER TABLE users ADD COLUMN password_changed_at {{TEXT}};`
   }
 ];
 

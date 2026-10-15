@@ -254,3 +254,126 @@ test('security headers are present', async () => {
   assert.ok(res.headers.get('content-security-policy')?.includes("default-src 'self'"));
   assert.equal(res.headers.get('x-powered-by'), null, 'framework fingerprint should be hidden');
 });
+
+/* ---------------- Password reset ---------------- */
+
+test('forgot-password cannot be used to discover which emails exist', async () => {
+  const known = await call('POST', '/api/auth/forgot-password', { email: 'test@example.com' }, false);
+  const unknown = await call('POST', '/api/auth/forgot-password', { email: 'ghost@nowhere.test' }, false);
+  assert.equal(known.status, 200);
+  assert.equal(unknown.status, 200);
+  assert.equal(known.json.message, unknown.json.message, 'both answers must be identical');
+});
+
+test('a reset link works once, then never again', async () => {
+  const req = await call('POST', '/api/auth/forgot-password', { email: 'test@example.com' }, false);
+  const link = req.json.devResetLink;
+  assert.ok(link, 'dev link should be returned when no mail provider is set');
+  const token = new URL(link).searchParams.get('token');
+
+  const preview = await call('GET', `/api/auth/reset-password/${token}`, undefined, false);
+  assert.equal(preview.json.valid, true);
+  assert.ok(preview.json.email.includes('•'), 'preview email must be masked');
+
+  const weak = await call('POST', '/api/auth/reset-password', { token, password: 'aaaaaaaa' }, false);
+  assert.equal(weak.status, 400, 'a weak new password must still be refused');
+
+  const done = await call('POST', '/api/auth/reset-password', { token, password: 'Rotated@2026x' }, false);
+  assert.equal(done.status, 200);
+  assert.ok(done.json.token, 'a fresh session should be issued');
+
+  const replay = await call('POST', '/api/auth/reset-password', { token, password: 'Another@2026x' }, false);
+  assert.equal(replay.status, 400, 'the token must be single-use');
+
+  const login = await call('POST', '/api/auth/login', { email: 'test@example.com', password: 'Rotated@2026x' }, false);
+  assert.equal(login.status, 200);
+  token_after_reset = login.json.token;
+});
+
+let token_after_reset = null;
+
+test('resetting a password invalidates sessions issued before it', async () => {
+  const email = `revoke${Date.now()}@example.com`;
+  const created = await call('POST', '/api/auth/register', { name: 'Revoke', email, password: 'Str0ng!Pass1' }, false);
+  const oldSession = created.json.token;
+
+  const before = await fetch(base + '/api/expenses', { headers: { authorization: `Bearer ${oldSession}` } });
+  assert.equal(before.status, 200, 'session should work before the reset');
+
+  // JWT iat has one-second resolution, so the reset must land in a later second.
+  await new Promise((r) => setTimeout(r, 1100));
+  const link = (await call('POST', '/api/auth/forgot-password', { email }, false)).json.devResetLink;
+  const resetToken = new URL(link).searchParams.get('token');
+  await call('POST', '/api/auth/reset-password', { token: resetToken, password: 'Replaced@2026x' }, false);
+
+  const after = await fetch(base + '/api/expenses', { headers: { authorization: `Bearer ${oldSession}` } });
+  assert.equal(after.status, 401, 'the pre-reset session must stop working');
+});
+
+test('an invalid reset token reports invalid rather than erroring', async () => {
+  const r = await call('GET', '/api/auth/reset-password/not-a-real-token', undefined, false);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.valid, false);
+  assert.equal(r.json.reason, 'unknown');
+});
+
+/* ---------------- Shared groups ---------------- */
+
+test('a group can be shared with another account by invite link', async () => {
+  const owner = (await call('POST', '/api/auth/register',
+    { name: 'Owner', email: `own${Date.now()}@example.com`, password: 'Str0ng!Pass1' }, false)).json.token;
+  const guest = (await call('POST', '/api/auth/register',
+    { name: 'Guest', email: `guest${Date.now()}@example.com`, password: 'Str0ng!Pass1' }, false)).json.token;
+
+  const as = async (tok, method, path, body) => {
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${tok}` };
+    const res = await fetch(base + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, json: await res.json().catch(() => null) };
+  };
+
+  const group = await as(owner, 'POST', '/api/groups', { name: 'Trip', members: ['Owner', 'Guest', 'Riya'] });
+  const gid = group.json.group.id;
+
+  assert.equal((await as(guest, 'GET', `/api/groups/${gid}`)).status, 404,
+    'a stranger must not even learn the group exists');
+  assert.equal((await as(guest, 'POST', `/api/groups/${gid}/invite`, {})).status, 404,
+    'only the owner may issue invites');
+
+  const invite = await as(owner, 'POST', `/api/groups/${gid}/invite`, {});
+  assert.equal(invite.status, 201);
+  const token = invite.json.token;
+
+  const preview = await as(guest, 'GET', `/api/groups/invite/${token}`);
+  assert.equal(preview.json.valid, true);
+  const slot = preview.json.openSlots.find((s) => s.name === 'Guest');
+  assert.ok(slot, 'unclaimed names should be offered as slots');
+
+  const joined = await as(guest, 'POST', `/api/groups/invite/${token}/accept`, { memberId: slot.id });
+  assert.equal(joined.status, 201);
+
+  const seen = await as(guest, 'GET', `/api/groups/${gid}`);
+  assert.equal(seen.status, 200, 'the guest can now read the group');
+  assert.equal(seen.json.role, 'member');
+  assert.equal(seen.json.members.find((m) => m.name === 'Guest').isSelf, true,
+    '"you" must be the slot this account holds');
+  assert.equal(seen.json.members.find((m) => m.name === 'Owner').isSelf, false);
+
+  const added = await as(guest, 'POST', `/api/groups/${gid}/expenses`,
+    { description: 'Dinner', amount: 1200, payerId: slot.id });
+  assert.equal(added.status, 201, 'members may add shared expenses');
+
+  const ownerView = await as(owner, 'GET', `/api/groups/${gid}`);
+  assert.ok(ownerView.json.expenses.some((e) => e.description === 'Dinner'));
+  assert.equal(ownerView.json.balances.reduce((a, b) => a + b.net_minor, 0), 0);
+
+  assert.equal((await as(guest, 'DELETE', `/api/groups/${gid}`)).status, 404,
+    'a member must not be able to delete the group');
+
+  // A second person cannot take a slot that is already claimed.
+  const third = (await call('POST', '/api/auth/register',
+    { name: 'Third', email: `third${Date.now()}@example.com`, password: 'Str0ng!Pass1' }, false)).json.token;
+  assert.equal((await as(third, 'POST', `/api/groups/invite/${token}/accept`, { memberId: slot.id })).status, 409);
+
+  await as(owner, 'DELETE', `/api/groups/${gid}/invite`);
+  assert.equal((await as(third, 'GET', `/api/groups/invite/${token}`)).json.reason, 'revoked');
+});
