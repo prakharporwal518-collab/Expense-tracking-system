@@ -36,3 +36,26 @@ export const theme = {
     return next;
   }
 };
+
+/**
+ * Last known profile, kept so the app can still open when the network is down.
+ * Only identity and display preferences — the session itself is the token.
+ */
+const USER_KEY = 'fintrack.user';
+
+export const cachedUser = {
+  get() {
+    try {
+      const raw = localStorage.getItem(USER_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  },
+  set(user) {
+    try {
+      if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+      else localStorage.removeItem(USER_KEY);
+    } catch { /* private mode */ }
+  }
+};

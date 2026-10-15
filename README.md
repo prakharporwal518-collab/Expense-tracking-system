@@ -4,10 +4,14 @@ A full-stack expense tracker that does the things ordinary expense trackers don'
 it **forecasts** next month, **finds subscriptions you forgot about**, **flags spending
 that is out of character**, and **settles group debts in the fewest possible transfers**.
 
-Built with Node.js + Express + SQLite on the back end and a dependency-free
-vanilla-JS front end. No build step, no bundler, no CDN — clone, install, run.
+It installs to your phone's home screen, works offline, and lets you share a
+trip's expenses with the people actually on the trip.
 
-![Node](https://img.shields.io/badge/node-%3E%3D22.5-green) ![Tests](https://img.shields.io/badge/tests-64%20passing-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
+Built with Node.js + Express on the back end — Postgres in production, SQLite
+for zero-setup local work — and a dependency-free vanilla-JS front end. No build
+step, no bundler, no CDN.
+
+![Node](https://img.shields.io/badge/node-%3E%3D22.13-green) ![Tests](https://img.shields.io/badge/tests-84%20passing-brightgreen) ![PWA](https://img.shields.io/badge/PWA-offline%20ready-6366f1) ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
 
@@ -95,6 +99,33 @@ compound to if invested — plus what it does to your savings rate.
 0–100 from five independently-scored signals (savings rate, budget adherence, spending
 volatility, subscription load, tracking consistency), so the UI can name the one thing
 dragging it down instead of showing an opaque number.
+
+### 📱 Installs and works offline
+A real PWA. Add it to your home screen and it opens like an app. Expenses are
+logged in the moment — in a shop, on a phone, often with no signal — so an
+expense added offline is stored in IndexedDB and replayed when the connection
+returns, with the app shell served from cache so it still opens with no network.
+
+Each queued write carries a client-generated id that the server treats as an
+**idempotency key**, so a retry whose first attempt actually succeeded updates
+nothing instead of creating a second expense. Going offline does not sign you
+out, either: a transport failure is distinguished from a rejected token, so your
+queued data stays reachable.
+
+### 🔑 Password reset that is actually safe
+Tokens are random 32-byte values and only their SHA-256 is stored, so a leaked
+database yields no working links. Single-use, one hour, and a new request
+retires the old link. `forgot-password` answers identically whether or not the
+address is registered, so it cannot be used to discover who has an account — and
+a reset invalidates sessions issued before it, which is the point of resetting.
+
+### 🤝 Groups shared with real people
+Members used to be text labels in one person's database. Now the owner issues an
+invite link and other people sign in and see the same group. Joining **claims an
+existing name**, so the expenses already recorded against "Aman" become Aman's
+rather than starting from scratch. Members can add expenses and settle; only the
+owner can invite, unlink or delete. A stranger gets a 404, not a 403 — a 403
+would confirm the group exists.
 
 ### Plus
 👯 Duplicate detection · 🎯 Budget envelopes with pace + "safe to spend today" ·
@@ -188,7 +219,11 @@ Copy `.env.example` to `.env`. Every value has a safe development default.
 | Variable | Default | Notes |
 |---|---|---|
 | `PORT` | `3000` | |
-| `DB_FILE` | `./data/fintrack.db` | |
+| `DATABASE_URL` | unset | Postgres connection string. **Set this in production** — without it the app uses SQLite, which is wiped on hosts with ephemeral disks |
+| `DB_FILE` | `./data/fintrack.db` | SQLite path, used only when `DATABASE_URL` is unset |
+| `RESEND_API_KEY` | unset | Sends real reset emails. Without it the link is logged, and returned in the response outside production |
+| `APP_URL` | derived from request | Base URL used in emailed links |
+| `SEED_DEMO` | unset | `true` seeds demo data, only into a database with no accounts |
 | `JWT_SECRET` | auto-generated in dev | **Required** in production (≥16 chars) |
 | `DEFAULT_CURRENCY` | `INR` | |
 | `TOKEN_TTL_SECONDS` | `604800` | 7 days |
@@ -205,18 +240,18 @@ Copy `.env.example` to `.env`. Every value has a safe development default.
 | Health Check Path | `/api/health` |
 | `NODE_VERSION` | `22.22.2` — or omit it and let `.node-version` apply |
 | `JWT_SECRET` | a long random string (**required**; the app refuses to start without it in production) |
-| `DB_FILE` | `/var/data/fintrack.db` — **only if a Disk is mounted there**; otherwise leave it unset |
+| `DATABASE_URL` | your Postgres connection string — this is what makes the data persist |
 
 Do **not** set `PORT` or `HOST`; Render provides `PORT` and the app already binds `0.0.0.0`.
 
-SQLite writes to the local filesystem, which is ephemeral on Render, so there are
-two valid setups:
+**Use Postgres.** Set `DATABASE_URL` and the data survives every deploy, on the
+free tier, with no disk to pay for. Render's own free Postgres is deleted after
+30 days; [Neon](https://neon.tech) and [Supabase](https://supabase.com) have free
+tiers that do not expire. Any standard Postgres works.
 
-- **With a Disk** (paid instance): add a Disk with Mount Path `/var/data` and set
-  `DB_FILE=/var/data/fintrack.db`. Data survives deploys.
-- **Without a Disk** (free instance): leave `DB_FILE` unset. It defaults to `./data`
-  inside the project, which is writable. The app runs, but every deploy or restart
-  wipes all accounts and expenses — fine for a demo, not for real records.
+Without `DATABASE_URL` the app falls back to SQLite on the local filesystem,
+which is ephemeral on Render: it runs, but every deploy wipes all accounts and
+expenses. Fine for a throwaway demo, not for records anyone wants to keep.
 
 Without a Disk the database is empty after every deploy, and Render's shell is a
 paid feature, so `npm run seed` may not be available. Set `SEED_DEMO=true` to have
@@ -246,14 +281,20 @@ while quietly losing data. The error names the path and lists both fixes.
 npm test
 ```
 
-64 tests covering the algorithms (money splitting, NLP parsing, MAD outlier detection,
-subscription clustering, Holt forecasting, debt settlement) and the API (auth, cross-account
-isolation, validation, CSV import, error shapes, security headers). The API tests run
-against a throwaway database and clean up after themselves.
+84 tests covering the algorithms (money splitting, NLP parsing, MAD outlier detection,
+subscription clustering, Holt forecasting, debt settlement) and the API (auth, password
+reset, group sharing, offline idempotency, cross-account isolation, validation, CSV
+import, error shapes, security headers). The API tests run against a throwaway database
+and clean up after themselves.
+
+Both database backends are exercised: the suite runs on SQLite, and the same
+suite plus the live API sweep was verified against a real PostgreSQL 16 server.
 
 Several tests are **regression tests for bugs found during development** — for example,
-that a word beginning with "cr" ("credited") is not parsed as the crore multiplier, and
-that a forecast for an account with no history doesn't crash the trend chart.
+that a word beginning with "cr" ("credited") is not parsed as the crore multiplier, that
+a forecast for an account with no history doesn't crash the trend chart, that Node 22.5
+through 22.12 are rejected because `node:sqlite` was still flagged there, and that a
+replayed offline write cannot create a duplicate expense.
 
 ---
 

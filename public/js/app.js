@@ -1,7 +1,8 @@
 import { api, auth, setUnauthorizedHandler, ApiError } from './api.js';
-import { el, toast, toastError, setMoneyFormat, spinner, debounce } from './ui.js';
-import { state, setState, theme } from './state.js';
-import { authView } from './views/auth.js';
+import { el, toast, toastError, setMoneyFormat, spinner, debounce, modal } from './ui.js';
+import { state, setState, theme, cachedUser } from './state.js';
+import { pendingCount, onPendingChange } from './offline.js';
+import { authView, resetPasswordView } from './views/auth.js';
 import { dashboardView } from './views/dashboard.js';
 import { expensesView, openEditor } from './views/expenses.js';
 import { budgetsView } from './views/budgets.js';
@@ -35,26 +36,117 @@ async function boot() {
     // The token is stale — drop it and send the user back to sign-in once.
     if (!state.user) return;
     auth.token = null;
+    cachedUser.set(null);
     setState({ user: null });
     toast('Your session expired. Please sign in again.', { type: 'warn', timeout: 5000 });
     showAuth();
   });
 
   let user = null;
+  let startedOffline = false;
   if (auth.token) {
     try {
       const res = await api.get('/api/auth/me');
       user = res.user;
-    } catch {
-      auth.token = null; // expired or tampered — fall through to the login screen
+      cachedUser.set(user);
+    } catch (err) {
+      // A rejected token means sign in again. An unreachable server does not:
+      // logging someone out because their train went into a tunnel would also
+      // strand whatever they had queued offline.
+      const offline = err instanceof ApiError && (err.status === 0 || err.code === 'NETWORK');
+      const remembered = cachedUser.get();
+      if (offline && remembered) {
+        user = remembered;
+        startedOffline = true;
+      } else {
+        auth.token = null;
+        cachedUser.set(null);
+      }
     }
   }
 
   bootEl.hidden = true;
   appRoot.hidden = false;
 
-  if (user) await startApp(user);
-  else showAuth();
+  // An emailed reset link opens its own screen, signed in or not.
+  const params = new URLSearchParams(location.search);
+  if (location.pathname === '/reset-password' && params.get('token')) {
+    await resetPasswordView(appRoot, params.get('token'), (resetUser) => startApp(resetUser));
+    return;
+  }
+
+  if (user) {
+    await startApp(user);
+    if (startedOffline) {
+      toast('You are offline. Showing the last data loaded on this device.', { type: 'warn', timeout: 6000 });
+    }
+  } else {
+    showAuth();
+  }
+}
+
+/**
+ * An invite link lands here. The group is only reachable once signed in, so an
+ * unauthenticated visitor signs in first and the invite is picked up after.
+ */
+async function consumeInviteFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const invite = params.get('invite');
+  if (!invite) return;
+  history.replaceState(null, '', '/');
+
+  let preview;
+  try {
+    preview = await api.get(`/api/groups/invite/${encodeURIComponent(invite)}`);
+  } catch (err) {
+    return toastError(err);
+  }
+  if (!preview.valid) {
+    const why = { expired: 'That invite link has expired.', revoked: 'That invite link was revoked.', unknown: 'That invite link is not valid.' };
+    return toast(why[preview.reason] || 'That invite link cannot be used.', { type: 'warn', timeout: 6000 });
+  }
+  if (preview.alreadyJoined) {
+    toast(`You are already part of "${preview.group.name}".`, { type: 'info', timeout: 4000 });
+    return navigate('split');
+  }
+
+  const { el: mkEl } = { el };
+  const choice = el('select', { class: 'input' },
+    ...preview.openSlots.map((s) => el('option', { value: String(s.id) }, `I am ${s.name}`)),
+    el('option', { value: 'new' }, 'None of these — add me as someone new')
+  );
+  const nameInput = el('input', { class: 'input', placeholder: 'Your name in this group', value: state.user?.name || '' });
+  const nameField = el('div', { class: 'field', hidden: preview.openSlots.length > 0 }, el('label', { text: 'Name' }), nameInput);
+  choice.addEventListener('change', () => { nameField.hidden = choice.value !== 'new'; });
+
+  const joinBtn = el('button', { class: 'btn btn-primary' }, 'Join group');
+  const m = modal({
+    title: `Join "${preview.group.name}"`,
+    body: el('div', {},
+      el('p', { class: 'card-sub', style: 'margin-bottom:1rem', text: `This group has ${preview.memberCount} members. Pick the name that is yours so the expenses already recorded against it become yours.` }),
+      preview.openSlots.length ? el('div', { class: 'field' }, el('label', { text: 'Which one are you?' }), choice) : null,
+      nameField
+    ),
+    footer: [el('button', { class: 'btn', onclick: () => m.close() }, 'Not now'), joinBtn]
+  });
+
+  joinBtn.addEventListener('click', async () => {
+    joinBtn.disabled = true;
+    joinBtn.textContent = 'Joining…';
+    try {
+      const body = (!preview.openSlots.length || choice.value === 'new')
+        ? { name: nameInput.value.trim() || state.user?.name }
+        : { memberId: Number(choice.value) };
+      const res = await api.post(`/api/groups/invite/${encodeURIComponent(invite)}/accept`, body);
+      m.close();
+      toast(`You joined "${res.groupName || preview.group.name}".`, { type: 'success', timeout: 4000 });
+      navigate('split');
+    } catch (err) {
+      toastError(err);
+      joinBtn.disabled = false;
+      joinBtn.textContent = 'Join group';
+    }
+  });
 }
 
 function showAuth() {
@@ -64,6 +156,7 @@ function showAuth() {
 
 async function startApp(user) {
   setState({ user });
+  cachedUser.set(user);
   setMoneyFormat(user.currency, user.locale);
 
   try {
@@ -76,6 +169,11 @@ async function startApp(user) {
 
   renderShell();
   navigate(location.hash.replace('#', '') || 'dashboard');
+
+  registerServiceWorker();
+  paintNetbar();
+  drainOutbox();
+  consumeInviteFromUrl();
 }
 
 /* ------------------------------------------------------------------ */
@@ -189,7 +287,7 @@ function wireQuickAdd(input, preview) {
     if (!parsed?.ok) return;
     const f = parsed.fields;
     try {
-      const res = await api.post('/api/expenses', {
+      const res = await api.createExpense({
         amount: f.amountMinor / 100,
         merchant: f.merchant,
         note: f.note,
@@ -200,6 +298,11 @@ function wireQuickAdd(input, preview) {
         ...(f.categoryId ? { categoryId: f.categoryId } : {})
       });
       reset();
+      if (res.queued) {
+        paintNetbar();
+        toast('Saved on this device. It will sync when you are back online.', { type: 'warn', title: 'Offline', timeout: 5000 });
+        return;
+      }
       toast(`Added ${res.expense.merchant || 'expense'}`, {
         type: 'success', timeout: 3200,
         action: { label: 'Undo', onClick: () => api.del(`/api/expenses/${res.expense.id}`).then(refresh).catch(toastError) }
@@ -283,7 +386,7 @@ function baseCommands() {
     { icon: '🌓', label: 'Toggle light / dark theme', hint: 'theme', run: () => theme.toggle() },
     { icon: '⬇', label: 'Export expenses as CSV', hint: 'data', run: () => api.download('/api/io/export.csv', 'fintrack-expenses.csv').catch(toastError) },
     { icon: '⬇', label: 'Export full backup as JSON', hint: 'data', run: () => api.download('/api/io/export.json', 'fintrack-backup.json').catch(toastError) },
-    { icon: '🚪', label: 'Sign out', hint: 'session', run: async () => { try { await api.post('/api/auth/logout'); } catch { /* ignore */ } auth.token = null; location.reload(); } }
+    { icon: '🚪', label: 'Sign out', hint: 'session', run: async () => { try { await api.post('/api/auth/logout'); } catch { /* ignore */ } auth.token = null; cachedUser.set(null); location.reload(); } }
   ];
 }
 
@@ -378,8 +481,64 @@ window.addEventListener('error', (e) => {
   console.error('Uncaught error', e.error || e.message);
 });
 
-window.addEventListener('offline', () => toast('You are offline. Changes will fail until the connection returns.', { type: 'warn', timeout: 6000 }));
-window.addEventListener('online', () => toast('Back online.', { type: 'success', timeout: 2500 }));
+/* ------------------------------------------------------------------ */
+/* Offline support                                                     */
+/* ------------------------------------------------------------------ */
+const netbar = document.getElementById('netbar');
+
+async function paintNetbar() {
+  const queued = await pendingCount();
+  const offline = !navigator.onLine;
+  if (!offline && queued === 0) { netbar.hidden = true; return; }
+  netbar.hidden = false;
+  netbar.className = `netbar ${offline ? 'offline' : 'syncing'}`;
+  netbar.textContent = offline
+    ? (queued ? `Offline — ${queued} change${queued === 1 ? '' : 's'} saved on this device, they will sync automatically`
+              : 'Offline — you can still add expenses, they will sync when you reconnect')
+    : `Syncing ${queued} saved change${queued === 1 ? '' : 's'}…`;
+}
+
+async function drainOutbox() {
+  if (!navigator.onLine || !state.user) return;
+  const result = await api.flushOutbox();
+  if (result.sent) {
+    toast(`${result.sent} offline ${result.sent === 1 ? 'entry has' : 'entries have'} synced.`, { type: 'success', timeout: 3500 });
+    refresh();
+  }
+  if (result.dropped) {
+    toast(`${result.dropped} queued ${result.dropped === 1 ? 'entry was' : 'entries were'} rejected by the server and discarded: ${result.problems[0]}`,
+      { type: 'error', title: 'Could not sync', timeout: 9000 });
+  }
+  paintNetbar();
+}
+
+onPendingChange(paintNetbar);
+window.addEventListener('offline', () => { paintNetbar(); toast('You are offline. Expenses you add will be saved here and synced later.', { type: 'warn', timeout: 6000 }); });
+window.addEventListener('online', () => { paintNetbar(); toast('Back online.', { type: 'success', timeout: 2000 }); drainOutbox(); });
+
+/** Registers the service worker and offers a reload when a new build lands. */
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    reg.addEventListener('updatefound', () => {
+      const incoming = reg.installing;
+      if (!incoming) return;
+      incoming.addEventListener('statechange', () => {
+        // Only prompt when an older worker is already in control, otherwise
+        // this is the very first install and there is nothing to update.
+        if (incoming.state === 'installed' && navigator.serviceWorker.controller) {
+          toast('A new version of FinTrack is ready.', {
+            type: 'info', timeout: 0,
+            action: { label: 'Reload', onClick: () => { incoming.postMessage('skip-waiting'); location.reload(); } }
+          });
+        }
+      });
+    });
+  } catch (err) {
+    console.warn('Service worker registration failed', err);
+  }
+}
 
 boot().catch((err) => {
   console.error('Boot failed', err);

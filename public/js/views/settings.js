@@ -1,6 +1,6 @@
 import { api, auth } from '../api.js';
 import { el, money, dateLabel, toast, toastError, spinner, emptyState, modal, setMoneyFormat } from '../ui.js';
-import { state, setState, theme } from '../state.js';
+import { state, setState, theme, cachedUser } from '../state.js';
 
 export async function settingsView(root) {
   root.append(spinner());
@@ -81,6 +81,7 @@ export async function settingsView(root) {
         onclick: async () => {
           try { await api.post('/api/auth/logout'); } catch { /* cookie clears client-side anyway */ }
           auth.token = null;
+          cachedUser.set(null);
           location.reload();
         }
       }, 'Sign out')

@@ -377,3 +377,56 @@ test('a group can be shared with another account by invite link', async () => {
   await as(owner, 'DELETE', `/api/groups/${gid}/invite`);
   assert.equal((await as(third, 'GET', `/api/groups/invite/${token}`)).json.reason, 'revoked');
 });
+
+/* ---------------- Offline idempotency ---------------- */
+
+/**
+ * These run after the password-reset tests, which deliberately invalidate the
+ * shared session, so they work against an account of their own.
+ */
+async function freshAccount() {
+  const email = `idem${Date.now()}${Math.random().toString(36).slice(2, 6)}@example.com`;
+  const res = await call('POST', '/api/auth/register', { name: 'Idem', email, password: 'Str0ng!Pass1' }, false);
+  const tok = res.json.token;
+  return async (method, path, body) => {
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${tok}` };
+    const r = await fetch(base + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+}
+
+test('replaying a queued write does not create a second expense', async () => {
+  // The offline outbox retries on reconnect; a retry whose first attempt
+  // actually succeeded must land on the same row, not duplicate it.
+  const clientUuid = `offline-${Date.now()}-abcdef`;
+  const payload = { amount: 123.45, merchant: 'Replay Cafe', clientUuid };
+
+  const as = await freshAccount();
+  const first = await as('POST', '/api/expenses', payload);
+  assert.equal(first.status, 201);
+  assert.notEqual(first.json.replayed, true);
+
+  const second = await as('POST', '/api/expenses', payload);
+  assert.equal(second.status, 200, 'a replay should be accepted, not rejected');
+  assert.equal(second.json.replayed, true);
+  assert.equal(second.json.expense.id, first.json.expense.id, 'the same row must come back');
+
+  const found = await as('GET', '/api/expenses?search=Replay%20Cafe');
+  assert.equal(found.json.expenses.length, 1, 'exactly one row should exist');
+});
+
+test('two different queued writes both land', async () => {
+  const as = await freshAccount();
+  const stamp = Date.now();
+  const a = await as('POST', '/api/expenses', { amount: 10, merchant: 'Distinct Shop', clientUuid: `q-${stamp}-aaaaaa` });
+  const b = await as('POST', '/api/expenses', { amount: 20, merchant: 'Distinct Shop', clientUuid: `q-${stamp}-bbbbbb` });
+  assert.equal(a.status, 201);
+  assert.equal(b.status, 201);
+  assert.notEqual(a.json.expense.id, b.json.expense.id);
+});
+
+test('a malformed client id is rejected rather than stored', async () => {
+  const as = await freshAccount();
+  const r = await as('POST', '/api/expenses', { amount: 5, clientUuid: 'has spaces and $ymbols!' });
+  assert.equal(r.status, 422);
+});

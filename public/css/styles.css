@@ -354,3 +354,16 @@ kbd { border: 1px solid var(--border); border-radius: 5px; padding: 0 .3rem; fon
   .shell { grid-template-columns: 1fr; }
   body::before { display: none; }
 }
+
+/* ============ Connection state ============ */
+.netbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 140;
+  padding: .5rem 1rem; text-align: center; font-size: .82rem; font-weight: 600;
+  color: #0b1020;
+}
+.netbar.offline { background: linear-gradient(90deg, var(--warn), #fbbf24); }
+.netbar.syncing { background: linear-gradient(90deg, var(--accent), #67e8f9); }
+.netbar:not([hidden]) ~ .shell .sidebar { top: 2rem; }
+
+.linklike { color: var(--brand); font-size: .78rem; font-weight: 600; background: none; padding: 0; }
+.linklike:hover { text-decoration: underline; }

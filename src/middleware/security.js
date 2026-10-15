@@ -13,6 +13,8 @@ export function securityHeaders(req, res, next) {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "connect-src 'self'",
+      "worker-src 'self'",
+      "manifest-src 'self'",
       "font-src 'self'",
       "base-uri 'self'",
       "form-action 'self'",

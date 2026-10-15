@@ -61,11 +61,42 @@ async function request(method, path, body, opts = {}) {
   return payload;
 }
 
+import { queueExpense, flush, newUuid } from './offline.js';
+
 export const api = {
   get: (p, o) => request('GET', p, undefined, o),
   post: (p, b, o) => request('POST', p, b ?? {}, o),
   patch: (p, b, o) => request('PATCH', p, b ?? {}, o),
   del: (p, o) => request('DELETE', p, undefined, o),
+  /**
+   * Creates an expense, falling back to the offline outbox when the network is
+   * unreachable. The caller is told which happened so the UI can be honest
+   * about whether the entry has actually reached the server yet.
+   */
+  async createExpense(payload) {
+    const body = { ...payload, clientUuid: payload.clientUuid || newUuid() };
+    if (!navigator.onLine) {
+      await queueExpense(body);
+      return { queued: true, expense: null };
+    }
+    try {
+      const res = await request('POST', '/api/expenses', body);
+      return { queued: false, ...res };
+    } catch (err) {
+      // Only a transport failure is queueable; a rejection would never succeed.
+      if (err instanceof ApiError && (err.status === 0 || err.code === 'NETWORK')) {
+        await queueExpense(body);
+        return { queued: true, expense: null };
+      }
+      throw err;
+    }
+  },
+
+  /** Replays anything the outbox is holding. */
+  flushOutbox() {
+    return flush((payload) => request('POST', '/api/expenses', payload));
+  },
+
   /** Triggers a browser download for an authenticated endpoint. */
   async download(path, filename) {
     const res = await fetch(path, { headers: auth.token ? { authorization: `Bearer ${auth.token}` } : {} });

@@ -12,7 +12,8 @@
     "start": "node --no-warnings=ExperimentalWarning src/server.js",
     "dev": "node --no-warnings=ExperimentalWarning --watch src/server.js",
     "seed": "node --no-warnings=ExperimentalWarning src/db/seed.js",
-    "test": "node --no-warnings=ExperimentalWarning --test tests/*.test.js"
+    "test": "node --no-warnings=ExperimentalWarning --test tests/*.test.js",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

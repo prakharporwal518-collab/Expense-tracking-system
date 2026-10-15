@@ -53,8 +53,12 @@ async function openGroupDetail(groupId, onChanged) {
   /* Balances */
   body.append(el('h4', { text: 'Balances', style: 'font-size:.85rem;color:var(--text-dim);margin-bottom:.5rem' }));
   for (const b of g.balances) {
+    const memberMeta = g.members.find((m) => m.id === b.id);
     body.append(el('div', { style: 'display:flex;align-items:center;gap:.5rem;padding:.35rem 0;font-size:.88rem' },
       el('span', { text: b.name }),
+      memberMeta?.isSelf ? el('span', { class: 'pill', text: 'you' })
+        : memberMeta?.linked ? el('span', { class: 'pill', title: 'Has joined and can see this group', text: '✓ joined' })
+        : el('span', { class: 'pill', style: 'opacity:.6', title: 'Not yet invited — just a name on the list', text: 'not joined' }),
       el('span', {
         style: `margin-left:auto;font-weight:600;color:${b.net_minor > 0 ? 'var(--good)' : b.net_minor < 0 ? 'var(--bad)' : 'var(--text-dim)'}`,
         text: b.net_minor === 0 ? 'settled' : b.net_minor > 0 ? `is owed ${money(b.net_minor)}` : `owes ${money(Math.abs(b.net_minor))}`
@@ -123,7 +127,10 @@ async function openGroupDetail(groupId, onChanged) {
     wide: true,
     body,
     footer: [
-      el('button', { class: 'btn btn-danger', onclick: async () => {
+      g.role === 'owner'
+        ? el('button', { class: 'btn', onclick: () => openInvite(groupId, g.group.name) }, '🔗 Invite people')
+        : el('span', { class: 'card-sub', style: 'align-self:center', text: 'Shared with you' }),
+      el('button', { class: 'btn btn-danger', hidden: g.role !== 'owner', onclick: async () => {
         const ok = await confirmDialog({ title: 'Delete group?', message: `"${g.group.name}" and all its shared expenses will be deleted.`, confirmLabel: 'Delete', danger: true });
         if (!ok) return;
         try { await api.del(`/api/groups/${groupId}`); m.close(); toast('Group deleted', { type: 'success' }); onChanged?.(); }
@@ -239,6 +246,72 @@ function openGroupCreator(onSaved) {
       errorBox.textContent = Array.isArray(err.details) ? err.details.join(' · ') : err.message;
       errorBox.hidden = false;
       saveBtn.disabled = false;
+    }
+  });
+}
+
+/**
+ * Creates (or replaces) the group's invite link. Only one link is live at a
+ * time, so sharing a new one quietly retires the old.
+ */
+async function openInvite(groupId, groupName) {
+  const output = el('div');
+  const createBtn = el('button', { class: 'btn btn-primary' }, 'Create invite link');
+
+  const m = modal({
+    title: `Invite people to "${groupName}"`,
+    body: el('div', {},
+      el('p', { class: 'card-sub', style: 'margin-bottom:1rem' },
+        'Anyone with this link can join the group, claim their name, and add or settle expenses. ',
+        'Creating a new link replaces any previous one.'),
+      output
+    ),
+    footer: [el('button', { class: 'btn', onclick: () => m.close() }, 'Close'), createBtn]
+  });
+
+  createBtn.addEventListener('click', async () => {
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating…';
+    try {
+      const res = await api.post(`/api/groups/${groupId}/invite`, {});
+      const field = el('input', { class: 'input', readonly: true, value: res.url, onclick: (e) => e.target.select() });
+      output.replaceChildren(
+        el('div', { class: 'field' }, el('label', { text: 'Share this link' }), field),
+        el('div', { style: 'display:flex;gap:.5rem;flex-wrap:wrap' },
+          el('button', {
+            class: 'btn btn-sm',
+            onclick: async () => {
+              try {
+                // The clipboard API needs a secure context; fall back to selecting.
+                await navigator.clipboard.writeText(res.url);
+                toast('Link copied', { type: 'success', timeout: 2000 });
+              } catch {
+                field.select();
+                toast('Press Ctrl/⌘ C to copy the selected link', { type: 'info', timeout: 3500 });
+              }
+            }
+          }, '📋 Copy'),
+          navigator.share
+            ? el('button', { class: 'btn btn-sm', onclick: () => navigator.share({ title: groupName, url: res.url }).catch(() => {}) }, '↗ Share')
+            : null,
+          el('button', {
+            class: 'btn btn-sm btn-danger',
+            onclick: async () => {
+              try {
+                await api.del(`/api/groups/${groupId}/invite`);
+                output.replaceChildren(el('p', { class: 'card-sub', text: 'Link revoked. It no longer works.' }));
+                toast('Invite link revoked', { type: 'success', timeout: 2500 });
+              } catch (err) { toastError(err); }
+            }
+          }, 'Revoke')
+        ),
+        el('p', { class: 'strength-tip', style: 'margin-top:.6rem', text: `Expires ${new Date(res.expiresAt).toLocaleDateString()}.` })
+      );
+      createBtn.hidden = true;
+    } catch (err) {
+      toastError(err);
+      createBtn.disabled = false;
+      createBtn.textContent = 'Create invite link';
     }
   });
 }

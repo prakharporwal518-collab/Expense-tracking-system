@@ -233,7 +233,14 @@ export function openEditor(expense, onSaved, prefill = null) {
     try {
       const res = isEdit
         ? await api.patch(`/api/expenses/${expense.id}`, payload)
-        : await api.post('/api/expenses', payload);
+        : await api.createExpense(payload);
+
+      if (res.queued) {
+        m.close();
+        toast('Saved on this device. It will sync when you are back online.', { type: 'warn', title: 'Offline', timeout: 5000 });
+        onSaved?.();
+        return;
+      }
 
       m.close();
       toast(isEdit ? 'Expense updated' : 'Expense added', { type: 'success', timeout: 2400 });
