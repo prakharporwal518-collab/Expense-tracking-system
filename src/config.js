@@ -50,6 +50,12 @@ export const config = {
   port: Number(process.env.PORT || 3000),
   host: process.env.HOST || '0.0.0.0',
   dbFile: process.env.DB_FILE || path.join(ROOT, 'data', 'fintrack.db'),
+  // Postgres when DATABASE_URL is present (persistent), SQLite otherwise.
+  databaseUrl: process.env.DATABASE_URL || null,
+  databaseSsl: !/^(0|false|no)$/i.test(process.env.DATABASE_SSL || (process.env.DATABASE_URL?.includes('localhost') || process.env.DATABASE_URL?.includes('127.0.0.1') ? 'false' : 'true')),
+  appUrl: process.env.APP_URL || null,
+  resendApiKey: process.env.RESEND_API_KEY || null,
+  mailFrom: process.env.MAIL_FROM || 'FinTrack <onboarding@resend.dev>',
   jwtSecret: resolveSecret(),
   tokenTtlSeconds: Number(process.env.TOKEN_TTL_SECONDS || 60 * 60 * 24 * 7),
   defaultCurrency: process.env.DEFAULT_CURRENCY || 'INR',

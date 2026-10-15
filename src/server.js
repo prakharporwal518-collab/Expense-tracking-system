@@ -9,4 +9,4 @@ import { checkRuntime } from './lib/runtime.js';
 checkRuntime();
 
 const { start } = await import('./bootstrap.js');
-start();
+await start();

@@ -8,12 +8,12 @@ export const metaRouter = express.Router();
 
 const startedAt = Date.now();
 
-metaRouter.get('/health', (_req, res) => {
+metaRouter.get('/health', async (_req, res) => {
   // A health check that does not touch the database is not a health check.
   let database = 'down';
   let schemaVersion = null;
   try {
-    const row = get('SELECT MAX(version) AS v FROM schema_migrations');
+    const row = await get('SELECT MAX(version) AS v FROM schema_migrations');
     schemaVersion = row?.v ?? null;
     database = 'up';
   } catch {

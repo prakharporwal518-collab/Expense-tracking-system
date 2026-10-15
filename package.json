@@ -15,6 +15,7 @@
     "test": "node --no-warnings=ExperimentalWarning --test tests/*.test.js"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "pg": "^8.23.1"
   }
 }

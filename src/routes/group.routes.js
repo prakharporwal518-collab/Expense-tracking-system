@@ -9,26 +9,26 @@ import { audit, evaluateAchievements } from '../services/store.js';
 
 export const groupRouter = express.Router();
 
-function ownedGroup(userId, groupId) {
-  const group = plain(get('SELECT * FROM groups WHERE id = ? AND user_id = ?', [groupId, userId]));
+async function ownedGroup(userId, groupId) {
+  const group = plain(await get('SELECT * FROM groups WHERE id = ? AND user_id = ?', [groupId, userId]));
   if (!group) throw notFound('Group not found');
   return group;
 }
 
 groupRouter.get('/', asyncHandler(async (req, res) => {
-  const groups = plainAll(all('SELECT * FROM groups WHERE user_id = ? ORDER BY created_at DESC', [req.user.id]));
-  res.json({
-    groups: groups.map((g) => {
-      const members = plainAll(all('SELECT * FROM group_members WHERE group_id = ?', [g.id]));
-      const expenses = plainAll(all('SELECT * FROM group_expenses WHERE group_id = ?', [g.id]));
-      return {
-        id: g.id, name: g.name, currency: g.currency, createdAt: g.created_at,
-        memberCount: members.length,
-        expenseCount: expenses.length,
-        totalMinor: expenses.reduce((s, e) => s + e.amount_minor, 0)
-      };
-    })
-  });
+  const groups = plainAll(await all('SELECT * FROM groups WHERE user_id = ? ORDER BY created_at DESC', [req.user.id]));
+  const summaries = [];
+  for (const g of groups) {
+    const members = plainAll(await all('SELECT * FROM group_members WHERE group_id = ?', [g.id]));
+    const expenses = plainAll(await all('SELECT * FROM group_expenses WHERE group_id = ?', [g.id]));
+    summaries.push({
+      id: g.id, name: g.name, currency: g.currency, createdAt: g.created_at,
+      memberCount: members.length,
+      expenseCount: expenses.length,
+      totalMinor: expenses.reduce((s, e) => s + e.amount_minor, 0)
+    });
+  }
+  res.json({ groups: summaries });
 }));
 
 groupRouter.post('/', asyncHandler(async (req, res) => {
@@ -39,28 +39,28 @@ groupRouter.post('/', asyncHandler(async (req, res) => {
   });
   if (body.members.length < 2) throw badRequest('A group needs at least 2 members');
 
-  const id = tx(() => {
-    const result = run('INSERT INTO groups (user_id, name, currency) VALUES (?,?,?)',
+  const id = await tx(async () => {
+    const result = await run('INSERT INTO groups (user_id, name, currency) VALUES (?,?,?)',
       [req.user.id, body.name, (body.currency || req.user.currency).toUpperCase()]);
     const groupId = Number(result.lastInsertRowid);
-    body.members.forEach((name, i) => {
-      run('INSERT INTO group_members (group_id, name, is_self) VALUES (?,?,?)', [groupId, name, i === 0 ? 1 : 0]);
-    });
+    for (const [i, name] of body.members.entries()) {
+      await run('INSERT INTO group_members (group_id, name, is_self) VALUES (?,?,?)', [groupId, name, i === 0 ? 1 : 0]);
+    }
     return groupId;
   });
 
-  audit(req.user.id, 'create', 'group', id, `Created group "${body.name}"`);
-  res.status(201).json({ group: plain(get('SELECT * FROM groups WHERE id = ?', [id])) });
+  await audit(req.user.id, 'create', 'group', id, `Created group "${body.name}"`);
+  res.status(201).json({ group: plain(await get('SELECT * FROM groups WHERE id = ?', [id])) });
 }));
 
 groupRouter.get('/:id', asyncHandler(async (req, res) => {
   const groupId = Number(req.params.id);
   if (!Number.isInteger(groupId)) throw badRequest('Invalid group id');
-  const group = ownedGroup(req.user.id, groupId);
+  const group = await ownedGroup(req.user.id, groupId);
 
-  const members = plainAll(all('SELECT * FROM group_members WHERE group_id = ? ORDER BY id', [groupId]));
-  const expenses = plainAll(all('SELECT * FROM group_expenses WHERE group_id = ? ORDER BY spent_at DESC', [groupId]));
-  const settlements = plainAll(all('SELECT * FROM settlements WHERE group_id = ? ORDER BY settled_at DESC', [groupId]));
+  const members = plainAll(await all('SELECT * FROM group_members WHERE group_id = ? ORDER BY id', [groupId]));
+  const expenses = plainAll(await all('SELECT * FROM group_expenses WHERE group_id = ? ORDER BY spent_at DESC', [groupId]));
+  const settlements = plainAll(await all('SELECT * FROM settlements WHERE group_id = ? ORDER BY settled_at DESC', [groupId]));
 
   const plan = settlementPlan(members, expenses, settlements);
   const nameOf = new Map(members.map((m) => [m.id, m.name]));
@@ -87,16 +87,16 @@ groupRouter.get('/:id', asyncHandler(async (req, res) => {
 groupRouter.post('/:id/members', asyncHandler(async (req, res) => {
   const groupId = Number(req.params.id);
   if (!Number.isInteger(groupId)) throw badRequest('Invalid group id');
-  ownedGroup(req.user.id, groupId);
+  await ownedGroup(req.user.id, groupId);
   const body = validate(req.body, { name: { type: 'string', required: true, min: 1, max: 40 } });
-  const result = run('INSERT INTO group_members (group_id, name) VALUES (?,?)', [groupId, body.name]);
+  const result = await run('INSERT INTO group_members (group_id, name) VALUES (?,?)', [groupId, body.name]);
   res.status(201).json({ member: { id: Number(result.lastInsertRowid), name: body.name, isSelf: false } });
 }));
 
 groupRouter.post('/:id/expenses', asyncHandler(async (req, res) => {
   const groupId = Number(req.params.id);
   if (!Number.isInteger(groupId)) throw badRequest('Invalid group id');
-  ownedGroup(req.user.id, groupId);
+  await ownedGroup(req.user.id, groupId);
 
   const body = validate(req.body, {
     description: { type: 'string', required: true, min: 1, max: 120 },
@@ -107,7 +107,7 @@ groupRouter.post('/:id/expenses', asyncHandler(async (req, res) => {
     spentAt: { type: 'date', default: () => new Date().toISOString() }
   });
 
-  const members = plainAll(all('SELECT id FROM group_members WHERE group_id = ?', [groupId]));
+  const members = plainAll(await all('SELECT id FROM group_members WHERE group_id = ?', [groupId]));
   const memberIds = new Set(members.map((m) => m.id));
   if (!memberIds.has(body.payerId)) throw badRequest('The payer must be a member of this group');
 
@@ -134,12 +134,12 @@ groupRouter.post('/:id/expenses', asyncHandler(async (req, res) => {
     throw badRequest(`splitMode "${body.splitMode}" requires a shares object`);
   }
 
-  const result = run(
+  const result = await run(
     `INSERT INTO group_expenses (group_id, payer_id, description, amount_minor, split_mode, shares_json, spent_at)
      VALUES (?,?,?,?,?,?,?)`,
     [groupId, body.payerId, body.description, amountMinor, body.splitMode, JSON.stringify(sharesMinor), body.spentAt]
   );
-  audit(req.user.id, 'create', 'group_expense', Number(result.lastInsertRowid), `Added "${body.description}" to group`);
+  await audit(req.user.id, 'create', 'group_expense', Number(result.lastInsertRowid), `Added "${body.description}" to group`);
   res.status(201).json({ id: Number(result.lastInsertRowid) });
 }));
 
@@ -147,17 +147,17 @@ groupRouter.delete('/:id/expenses/:expenseId', asyncHandler(async (req, res) => 
   const groupId = Number(req.params.id);
   const expenseId = Number(req.params.expenseId);
   if (!Number.isInteger(groupId) || !Number.isInteger(expenseId)) throw badRequest('Invalid id');
-  ownedGroup(req.user.id, groupId);
-  const existing = get('SELECT id FROM group_expenses WHERE id = ? AND group_id = ?', [expenseId, groupId]);
+  await ownedGroup(req.user.id, groupId);
+  const existing = await get('SELECT id FROM group_expenses WHERE id = ? AND group_id = ?', [expenseId, groupId]);
   if (!existing) throw notFound('Group expense not found');
-  run('DELETE FROM group_expenses WHERE id = ? AND group_id = ?', [expenseId, groupId]);
+  await run('DELETE FROM group_expenses WHERE id = ? AND group_id = ?', [expenseId, groupId]);
   res.json({ ok: true });
 }));
 
 groupRouter.post('/:id/settle', asyncHandler(async (req, res) => {
   const groupId = Number(req.params.id);
   if (!Number.isInteger(groupId)) throw badRequest('Invalid group id');
-  ownedGroup(req.user.id, groupId);
+  await ownedGroup(req.user.id, groupId);
 
   const body = validate(req.body, {
     fromId: { type: 'number', integer: true, required: true, min: 1 },
@@ -166,22 +166,22 @@ groupRouter.post('/:id/settle', asyncHandler(async (req, res) => {
   });
   if (body.fromId === body.toId) throw badRequest('A member cannot settle with themselves');
 
-  const members = plainAll(all('SELECT id FROM group_members WHERE group_id = ?', [groupId]));
+  const members = plainAll(await all('SELECT id FROM group_members WHERE group_id = ?', [groupId]));
   const ids = new Set(members.map((m) => m.id));
   if (!ids.has(body.fromId) || !ids.has(body.toId)) throw badRequest('Both members must belong to this group');
 
-  run('INSERT INTO settlements (group_id, from_id, to_id, amount_minor) VALUES (?,?,?,?)',
+  await run('INSERT INTO settlements (group_id, from_id, to_id, amount_minor) VALUES (?,?,?,?)',
     [groupId, body.fromId, body.toId, toMinor(body.amount)]);
-  audit(req.user.id, 'settle', 'group', groupId, `Recorded a settlement of ${body.amount}`);
-  const unlocked = evaluateAchievements(req.user.id);
+  await audit(req.user.id, 'settle', 'group', groupId, `Recorded a settlement of ${body.amount}`);
+  const unlocked = await evaluateAchievements(req.user.id);
   res.status(201).json({ ok: true, unlocked });
 }));
 
 groupRouter.delete('/:id', asyncHandler(async (req, res) => {
   const groupId = Number(req.params.id);
   if (!Number.isInteger(groupId)) throw badRequest('Invalid group id');
-  const group = ownedGroup(req.user.id, groupId);
-  run('DELETE FROM groups WHERE id = ? AND user_id = ?', [groupId, req.user.id]);
-  audit(req.user.id, 'delete', 'group', groupId, `Deleted group "${group.name}"`);
+  const group = await ownedGroup(req.user.id, groupId);
+  await run('DELETE FROM groups WHERE id = ? AND user_id = ?', [groupId, req.user.id]);
+  await audit(req.user.id, 'delete', 'group', groupId, `Deleted group "${group.name}"`);
   res.json({ ok: true });
 }));

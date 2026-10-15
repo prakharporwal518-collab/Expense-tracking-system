@@ -4,13 +4,13 @@ import { DAY_MS, isoDay } from '../lib/dates.js';
 
 /** Shared data-access helpers used by several routers. */
 
-export const liveExpenses = (userId, { from, to, limit = 5000 } = {}) => {
+export const liveExpenses = async (userId, { from, to, limit = 5000 } = {}) => {
   const clauses = ['e.user_id = ?', 'e.deleted_at IS NULL'];
   const params = [userId];
   if (from) { clauses.push('e.spent_at >= ?'); params.push(from); }
   if (to) { clauses.push('e.spent_at <= ?'); params.push(to); }
   params.push(limit);
-  return plainAll(all(
+  return plainAll(await all(
     `SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color, c.kind AS category_kind
      FROM expenses e LEFT JOIN categories c ON c.id = e.category_id
      WHERE ${clauses.join(' AND ')}
@@ -50,9 +50,9 @@ export function safeJson(str, fallback) {
   }
 }
 
-export function audit(userId, action, entity, entityId, summary, payload = {}) {
+export async function audit(userId, action, entity, entityId, summary, payload = {}) {
   try {
-    run('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, payload_json) VALUES (?,?,?,?,?,?)',
+    await run('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, payload_json) VALUES (?,?,?,?,?,?)',
       [userId, action, entity, entityId ?? null, summary, JSON.stringify(payload).slice(0, 8000)]);
   } catch {
     // Audit is best-effort; never fail the user's actual operation over it.
@@ -60,11 +60,11 @@ export function audit(userId, action, entity, entityId, summary, payload = {}) {
 }
 
 /** Consecutive days (ending today or yesterday) with at least one expense. */
-export function computeStreak(userId) {
-  const rows = all(
+export async function computeStreak(userId) {
+  const rows = (await all(
     `SELECT DISTINCT date(spent_at) AS d FROM expenses
      WHERE user_id = ? AND deleted_at IS NULL ORDER BY d DESC LIMIT 400`, [userId]
-  ).map((r) => r.d);
+  )).map((r) => r.d);
   if (!rows.length) return { current: 0, longest: 0, lastTracked: null };
 
   const daySet = new Set(rows);
@@ -90,24 +90,24 @@ export function computeStreak(userId) {
   return { current, longest, lastTracked: rows[0] };
 }
 
-export function unlock(userId, code) {
+export async function unlock(userId, code) {
   const meta = ACHIEVEMENTS.find((a) => a.code === code);
   if (!meta) return null;
-  const existing = get('SELECT id FROM achievements WHERE user_id = ? AND code = ?', [userId, code]);
+  const existing = await get('SELECT id FROM achievements WHERE user_id = ? AND code = ?', [userId, code]);
   if (existing) return null;
-  run('INSERT INTO achievements (user_id, code) VALUES (?, ?)', [userId, code]);
-  audit(userId, 'unlock', 'achievement', null, `Unlocked "${meta.name}"`);
+  await run('INSERT INTO achievements (user_id, code) VALUES (?, ?)', [userId, code]);
+  await audit(userId, 'unlock', 'achievement', null, `Unlocked "${meta.name}"`);
   return meta;
 }
 
 /** Re-evaluates every achievement rule; returns only the newly unlocked ones. */
-export function evaluateAchievements(userId) {
+export async function evaluateAchievements(userId) {
   const fresh = [];
-  const count = get('SELECT COUNT(*) AS n FROM expenses WHERE user_id = ? AND deleted_at IS NULL', [userId])?.n ?? 0;
-  const streak = computeStreak(userId);
-  const budgets = get('SELECT COUNT(*) AS n FROM budgets WHERE user_id = ?', [userId])?.n ?? 0;
-  const goals = plainAll(all('SELECT target_minor, saved_minor FROM goals WHERE user_id = ?', [userId]));
-  const settled = get('SELECT COUNT(*) AS n FROM settlements s JOIN groups g ON g.id = s.group_id WHERE g.user_id = ?', [userId])?.n ?? 0;
+  const count = (await get('SELECT COUNT(*) AS n FROM expenses WHERE user_id = ? AND deleted_at IS NULL', [userId]))?.n ?? 0;
+  const streak = await computeStreak(userId);
+  const budgets = (await get('SELECT COUNT(*) AS n FROM budgets WHERE user_id = ?', [userId]))?.n ?? 0;
+  const goals = plainAll(await all('SELECT target_minor, saved_minor FROM goals WHERE user_id = ?', [userId]));
+  const settled = (await get('SELECT COUNT(*) AS n FROM settlements s JOIN groups g ON g.id = s.group_id WHERE g.user_id = ?', [userId]))?.n ?? 0;
 
   const rules = [
     [count >= 1, 'first_expense'],
@@ -122,26 +122,26 @@ export function evaluateAchievements(userId) {
   ];
   for (const [condition, code] of rules) {
     if (!condition) continue;
-    const unlocked = unlock(userId, code);
+    const unlocked = await unlock(userId, code);
     if (unlocked) fresh.push(unlocked);
   }
   return fresh;
 }
 
-export function listAchievements(userId) {
-  const owned = new Map(plainAll(all('SELECT code, unlocked_at FROM achievements WHERE user_id = ?', [userId]))
+export async function listAchievements(userId) {
+  const owned = new Map(plainAll(await all('SELECT code, unlocked_at FROM achievements WHERE user_id = ?', [userId]))
     .map((r) => [r.code, r.unlocked_at]));
   return ACHIEVEMENTS.map((a) => ({ ...a, unlocked: owned.has(a.code), unlockedAt: owned.get(a.code) || null }));
 }
 
 /** Ensures a category exists by name, creating it if the user is new to it. */
-export function resolveCategoryId(userId, name, kind = 'expense') {
+export async function resolveCategoryId(userId, name, kind = 'expense') {
   if (!name) return null;
-  const existing = get('SELECT id FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [userId, name]);
+  const existing = await get('SELECT id FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [userId, name]);
   if (existing) return existing.id;
-  const result = run('INSERT INTO categories (user_id, name, kind) VALUES (?, ?, ?)', [userId, name, kind]);
+  const result = await run('INSERT INTO categories (user_id, name, kind) VALUES (?, ?, ?)', [userId, name, kind]);
   return Number(result.lastInsertRowid);
 }
 
-export const getCategory = (userId, id) =>
-  plain(get('SELECT * FROM categories WHERE id = ? AND user_id = ?', [id, userId]));
+export const getCategory = async (userId, id) =>
+  plain(await get('SELECT * FROM categories WHERE id = ? AND user_id = ?', [id, userId]));

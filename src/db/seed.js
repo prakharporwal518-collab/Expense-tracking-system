@@ -1,4 +1,4 @@
-import { getDb, run, get, tx, closeDb } from './index.js';
+import { initDb, run, get, tx, closeDb } from './index.js';
 import { hashPassword } from '../lib/password.js';
 import { DEFAULT_CATEGORIES } from './defaults.js';
 import { logger } from '../lib/logger.js';
@@ -46,34 +46,34 @@ const TYPICAL = {
   Health: [25000, 110000], Education: [30000, 250000]
 };
 
-export function seed({ months = 9, reset = true } = {}) {
-  getDb();
+export async function seed({ months = 9, reset = true } = {}) {
+  await initDb();
 
-  const existing = get('SELECT id FROM users WHERE email = ?', [DEMO.email]);
+  const existing = await get('SELECT id FROM users WHERE email = ?', [DEMO.email]);
   if (existing && reset) {
-    run('DELETE FROM users WHERE id = ?', [existing.id]); // cascades to everything
+    await run('DELETE FROM users WHERE id = ?', [existing.id]); // cascades to everything
     logger.info('Removed previous demo account');
   } else if (existing) {
     logger.info('Demo account already exists, skipping');
     return existing.id;
   }
 
-  return tx(() => {
+  return await tx(async () => {
     const passwordHash = hashPasswordSync();
-    const userId = Number(run(
+    const userId = Number((await run(
       'INSERT INTO users (email, name, password_hash, currency, monthly_income_minor) VALUES (?,?,?,?,?)',
       [DEMO.email, DEMO.name, passwordHash, 'INR', 4_500_000]
-    ).lastInsertRowid);
+    )).lastInsertRowid);
 
     const catIds = {};
     for (const c of DEFAULT_CATEGORIES) {
-      catIds[c.name] = Number(run(
+      catIds[c.name] = Number((await run(
         'INSERT INTO categories (user_id, name, icon, color, kind) VALUES (?,?,?,?,?)',
         [userId, c.name, c.icon, c.color, c.kind]
-      ).lastInsertRowid);
+      )).lastInsertRowid);
     }
 
-    const addExpense = (opts) => run(
+    const addExpense = async (opts) => run(
       `INSERT INTO expenses (user_id, category_id, amount_minor, currency, fx_rate, base_amount_minor,
                              merchant, note, payment_method, tags_json, is_income, spent_at)
        VALUES (?,?,?,?,1,?,?,?,?,?,?,?)`,
@@ -137,17 +137,20 @@ export function seed({ months = 9, reset = true } = {}) {
     // Budgets, goals and a trip group.
     const budgets = [['Food', 900_000], ['Transport', 400_000], ['Shopping', 600_000], ['Entertainment', 300_000], ['Groceries', 500_000]];
     for (const [name, amount] of budgets) {
-      run('INSERT INTO budgets (user_id, category_id, amount_minor, alert_at_percent) VALUES (?,?,?,?)', [userId, catIds[name], amount, 80]);
+      await run('INSERT INTO budgets (user_id, category_id, amount_minor, alert_at_percent) VALUES (?,?,?,?)', [userId, catIds[name], amount, 80]);
     }
 
-    run('INSERT INTO goals (user_id, name, target_minor, saved_minor, target_date) VALUES (?,?,?,?,?)',
+    await run('INSERT INTO goals (user_id, name, target_minor, saved_minor, target_date) VALUES (?,?,?,?,?)',
       [userId, 'New Laptop Fund', 8_000_000, 3_200_000, new Date(now.getTime() + 180 * DAY_MS).toISOString()]);
-    run('INSERT INTO goals (user_id, name, target_minor, saved_minor, target_date) VALUES (?,?,?,?,?)',
+    await run('INSERT INTO goals (user_id, name, target_minor, saved_minor, target_date) VALUES (?,?,?,?,?)',
       [userId, 'Emergency Fund', 15_000_000, 4_500_000, new Date(now.getTime() + 400 * DAY_MS).toISOString()]);
 
-    const groupId = Number(run('INSERT INTO groups (user_id, name, currency) VALUES (?,?,?)', [userId, 'Goa Trip 2026', 'INR']).lastInsertRowid);
-    const memberIds = ['Prakhar', 'Aman', 'Riya', 'Sana'].map((name, i) =>
-      Number(run('INSERT INTO group_members (group_id, name, is_self) VALUES (?,?,?)', [groupId, name, i === 0 ? 1 : 0]).lastInsertRowid));
+    const groupId = Number((await run('INSERT INTO groups (user_id, name, currency) VALUES (?,?,?)', [userId, 'Goa Trip 2026', 'INR'])).lastInsertRowid);
+    const memberIds = [];
+    for (const [i, name] of ['Prakhar', 'Aman', 'Riya', 'Sana'].entries()) {
+      const inserted = await run('INSERT INTO group_members (group_id, name, is_self) VALUES (?,?,?)', [groupId, name, i === 0 ? 1 : 0]);
+      memberIds.push(Number(inserted.lastInsertRowid));
+    }
 
     const groupExpenses = [
       ['Hotel booking', 2_400_000, 0, 'equal', {}],
@@ -158,11 +161,11 @@ export function seed({ months = 9, reset = true } = {}) {
     ];
     for (const [desc, amount, payerIdx, mode, shares] of groupExpenses) {
       const mapped = Object.fromEntries(Object.entries(shares).map(([k, v]) => [memberIds[Number(k)], v]));
-      run('INSERT INTO group_expenses (group_id, payer_id, description, amount_minor, split_mode, shares_json, spent_at) VALUES (?,?,?,?,?,?,?)',
+      await run('INSERT INTO group_expenses (group_id, payer_id, description, amount_minor, split_mode, shares_json, spent_at) VALUES (?,?,?,?,?,?,?)',
         [groupId, memberIds[payerIdx], desc, amount, mode, JSON.stringify(mapped), new Date(now.getTime() - randInt(10, 40) * DAY_MS).toISOString()]);
     }
 
-    run('INSERT INTO audit_log (user_id, action, entity, summary) VALUES (?,?,?,?)', [userId, 'seed', 'user', 'Demo data generated']);
+    await run('INSERT INTO audit_log (user_id, action, entity, summary) VALUES (?,?,?,?)', [userId, 'seed', 'user', 'Demo data generated']);
 
     logger.info('Seed complete', { user: DEMO.email, password: DEMO.password, expenses: count });
     return userId;
@@ -181,7 +184,7 @@ function hashPasswordSync() {
 const isDirectRun = process.argv[1] && process.argv[1].endsWith('seed.js');
 if (isDirectRun) {
   try {
-    seed();
+    await seed();
     closeDb();
     console.log(`\n  Demo login:  ${DEMO.email}  /  ${DEMO.password}\n`);
   } catch (err) {

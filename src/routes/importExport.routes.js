@@ -13,7 +13,7 @@ import { isoDay } from '../lib/dates.js';
 export const ioRouter = express.Router();
 
 ioRouter.get('/export.csv', asyncHandler(async (req, res) => {
-  const rows = liveExpenses(req.user.id, { limit: 20000 });
+  const rows = await liveExpenses(req.user.id, { limit: 20000 });
   const csv = toCsv(rows, [
     { key: 'spent_at', label: 'Date', get: (r) => isoDay(r.spent_at) },
     { key: 'amount', label: 'Amount', get: (r) => toMajor(r.amount_minor).toFixed(2) },
@@ -35,10 +35,10 @@ ioRouter.get('/export.json', asyncHandler(async (req, res) => {
     exportedAt: new Date().toISOString(),
     version: 1,
     user: { name: req.user.name, email: req.user.email, currency: req.user.currency },
-    categories: plainAll(all('SELECT name, icon, color, kind FROM categories WHERE user_id = ?', [req.user.id])),
-    budgets: plainAll(all('SELECT b.amount_minor, b.alert_at_percent, c.name AS category FROM budgets b LEFT JOIN categories c ON c.id=b.category_id WHERE b.user_id = ?', [req.user.id])),
-    goals: plainAll(all('SELECT name, target_minor, saved_minor, target_date FROM goals WHERE user_id = ?', [req.user.id])),
-    expenses: liveExpenses(req.user.id, { limit: 20000 }).map((r) => ({
+    categories: plainAll(await all('SELECT name, icon, color, kind FROM categories WHERE user_id = ?', [req.user.id])),
+    budgets: plainAll(await all('SELECT b.amount_minor, b.alert_at_percent, c.name AS category FROM budgets b LEFT JOIN categories c ON c.id=b.category_id WHERE b.user_id = ?', [req.user.id])),
+    goals: plainAll(await all('SELECT name, target_minor, saved_minor, target_date FROM goals WHERE user_id = ?', [req.user.id])),
+    expenses: (await liveExpenses(req.user.id, { limit: 20000 })).map((r) => ({
       date: r.spent_at, amountMinor: r.amount_minor, currency: r.currency,
       category: r.category_name, merchant: r.merchant, note: r.note,
       paymentMethod: r.payment_method, isIncome: Boolean(r.is_income), tags: safeJson(r.tags_json, [])
@@ -67,7 +67,7 @@ ioRouter.post('/import/csv', asyncHandler(async (req, res) => {
   const cols = detectColumns(header);
   if (cols.amount === -1) throw badRequest('Could not find an "Amount" column', { detectedHeaders: header });
 
-  const history = liveExpenses(req.user.id, { limit: 800 }).filter((r) => r.category_name)
+  const history = (await liveExpenses(req.user.id, { limit: 800 })).filter((r) => r.category_name)
     .map((r) => ({ text: `${r.merchant} ${r.note}`, category: r.category_name }));
   const model = trainModel(history);
 
@@ -134,11 +134,11 @@ ioRouter.post('/import/csv', asyncHandler(async (req, res) => {
   }
 
   let imported = 0;
-  tx(() => {
+  await tx(async () => {
     for (const p of parsed) {
-      const categoryId = p.category ? resolveCategoryId(req.user.id, p.category, p.isIncome ? 'income' : 'expense') : null;
+      const categoryId = p.category ? await resolveCategoryId(req.user.id, p.category, p.isIncome ? 'income' : 'expense') : null;
       const amountMinor = toMinor(p.amount);
-      run(
+      await run(
         `INSERT INTO expenses (user_id, category_id, amount_minor, currency, fx_rate, base_amount_minor,
                                merchant, note, payment_method, tags_json, is_income, spent_at)
          VALUES (?,?,?,?,1,?,?,?,?,'["imported"]',?,?)`,
@@ -149,8 +149,8 @@ ioRouter.post('/import/csv', asyncHandler(async (req, res) => {
     }
   });
 
-  audit(req.user.id, 'import', 'expense', null, `Imported ${imported} expenses from CSV`, { skipped: errors.length });
-  const unlocked = evaluateAchievements(req.user.id);
+  await audit(req.user.id, 'import', 'expense', null, `Imported ${imported} expenses from CSV`, { skipped: errors.length });
+  const unlocked = await evaluateAchievements(req.user.id);
   res.status(201).json({ imported, skipped: errors.length, errors: errors.slice(0, 50), unlocked });
 }));
 
@@ -161,7 +161,7 @@ ioRouter.get('/report/:month', asyncHandler(async (req, res) => {
 
   const from = `${month}-01T00:00:00.000Z`;
   const to = `${month}-31T23:59:59.999Z`;
-  const rows = liveExpenses(req.user.id, { from, to, limit: 5000 });
+  const rows = await liveExpenses(req.user.id, { from, to, limit: 5000 });
   const spent = rows.filter((r) => !r.is_income).reduce((s, r) => s + r.base_amount_minor, 0);
   const earned = rows.filter((r) => r.is_income).reduce((s, r) => s + r.base_amount_minor, 0);
 

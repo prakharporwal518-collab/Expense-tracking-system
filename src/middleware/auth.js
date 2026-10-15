@@ -9,12 +9,12 @@ function extractToken(req) {
   return null;
 }
 
-export function requireAuth(req, _res, next) {
+export async function requireAuth(req, _res, next) {
   try {
     const token = extractToken(req);
     if (!token) throw unauthorized('Please sign in to continue');
     const payload = verifyToken(token);
-    const user = get('SELECT id, email, name, currency, locale, monthly_income_minor, settings_json FROM users WHERE id = ?', [payload.sub]);
+    const user = await get('SELECT id, email, name, currency, locale, monthly_income_minor, settings_json FROM users WHERE id = ?', [payload.sub]);
     if (!user) throw unauthorized('Account no longer exists');
     req.user = plain(user);
     next();

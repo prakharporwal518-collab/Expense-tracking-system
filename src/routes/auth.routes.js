@@ -47,13 +47,13 @@ authRouter.post('/register', authLimiter, asyncHandler(async (req, res) => {
   const { score, tips } = passwordStrength(body.password);
   if (score < 2) throw badRequest('Please choose a stronger password', tips);
 
-  const existing = get('SELECT id FROM users WHERE email = ?', [email]);
+  const existing = await get('SELECT id FROM users WHERE email = ?', [email]);
   if (existing) throw new AppError('An account with this email already exists', { status: 409, code: 'EMAIL_TAKEN' });
 
   const passwordHash = await hashPassword(body.password);
 
-  const userId = tx(() => {
-    const result = run(
+  const userId = await tx(async () => {
+    const result = await run(
       `INSERT INTO users (email, name, password_hash, currency, monthly_income_minor)
        VALUES (?, ?, ?, ?, ?)`,
       [email, body.name, passwordHash, body.currency.toUpperCase(), Math.round(body.monthlyIncome * 100)]
@@ -61,15 +61,15 @@ authRouter.post('/register', authLimiter, asyncHandler(async (req, res) => {
     const id = Number(result.lastInsertRowid);
     // Seed a sensible starter set so the app is usable from the first second.
     for (const c of DEFAULT_CATEGORIES) {
-      run('INSERT INTO categories (user_id, name, icon, color, kind) VALUES (?, ?, ?, ?, ?)',
+      await run('INSERT INTO categories (user_id, name, icon, color, kind) VALUES (?, ?, ?, ?, ?)',
         [id, c.name, c.icon, c.color, c.kind]);
     }
-    run('INSERT INTO audit_log (user_id, action, entity, entity_id, summary) VALUES (?,?,?,?,?)',
+    await run('INSERT INTO audit_log (user_id, action, entity, entity_id, summary) VALUES (?,?,?,?,?)',
       [id, 'create', 'user', id, 'Account created']);
     return id;
   });
 
-  const user = plain(get('SELECT * FROM users WHERE id = ?', [userId]));
+  const user = plain(await get('SELECT * FROM users WHERE id = ?', [userId]));
   const token = signToken({ sub: userId, email });
   setAuthCookie(res, token);
   res.status(201).json({ token, user: publicUser(user) });
@@ -81,7 +81,7 @@ authRouter.post('/login', authLimiter, asyncHandler(async (req, res) => {
     password: { type: 'string', required: true, max: 200, trim: false }
   });
 
-  const user = plain(get('SELECT * FROM users WHERE email = ?', [body.email.toLowerCase()]));
+  const user = plain(await get('SELECT * FROM users WHERE email = ?', [body.email.toLowerCase()]));
   // Always run a verification so a missing account and a wrong password take
   // comparable time — otherwise response timing leaks which emails exist.
   const ok = user
@@ -122,8 +122,8 @@ authRouter.patch('/me', requireAuth, asyncHandler(async (req, res) => {
   if (!fields.length) throw badRequest('Nothing to update');
 
   params.push(req.user.id);
-  run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
-  const user = plain(get('SELECT * FROM users WHERE id = ?', [req.user.id]));
+  await run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
+  const user = plain(await get('SELECT * FROM users WHERE id = ?', [req.user.id]));
   res.json({ user: publicUser(user) });
 }));
 

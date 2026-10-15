@@ -10,7 +10,7 @@ export const categoryRouter = express.Router();
 
 categoryRouter.get('/', asyncHandler(async (req, res) => {
   const monthStart = startOfMonth(new Date()).toISOString();
-  const rows = plainAll(all(
+  const rows = plainAll(await all(
     `SELECT c.*,
             (SELECT COUNT(*) FROM expenses e WHERE e.category_id = c.id AND e.deleted_at IS NULL) AS usage_count,
             (SELECT COALESCE(SUM(e.base_amount_minor),0) FROM expenses e
@@ -34,20 +34,20 @@ categoryRouter.post('/', asyncHandler(async (req, res) => {
     kind: { type: 'string', enum: ['expense', 'income'], default: 'expense' }
   });
 
-  const existing = get('SELECT id FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [req.user.id, body.name]);
+  const existing = await get('SELECT id FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [req.user.id, body.name]);
   if (existing) throw conflict('You already have a category with that name');
 
-  const result = run('INSERT INTO categories (user_id, name, icon, color, kind) VALUES (?,?,?,?,?)',
+  const result = await run('INSERT INTO categories (user_id, name, icon, color, kind) VALUES (?,?,?,?,?)',
     [req.user.id, body.name, body.icon, body.color, body.kind]);
   const id = Number(result.lastInsertRowid);
-  audit(req.user.id, 'create', 'category', id, `Created category "${body.name}"`);
+  await audit(req.user.id, 'create', 'category', id, `Created category "${body.name}"`);
   res.status(201).json({ category: { id, ...body, archived: false, usageCount: 0, monthTotalMinor: 0 } });
 }));
 
 categoryRouter.patch('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw badRequest('Invalid category id');
-  const existing = plain(get('SELECT * FROM categories WHERE id = ? AND user_id = ?', [id, req.user.id]));
+  const existing = plain(await get('SELECT * FROM categories WHERE id = ? AND user_id = ?', [id, req.user.id]));
   if (!existing) throw notFound('Category not found');
 
   const body = validate(req.body, {
@@ -66,26 +66,26 @@ categoryRouter.patch('/:id', asyncHandler(async (req, res) => {
   if (!sets.length) throw badRequest('No changes supplied');
 
   params.push(id, req.user.id);
-  run(`UPDATE categories SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, params);
-  audit(req.user.id, 'update', 'category', id, `Updated category "${existing.name}"`);
-  res.json({ category: plain(get('SELECT * FROM categories WHERE id = ?', [id])) });
+  await run(`UPDATE categories SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, params);
+  await audit(req.user.id, 'update', 'category', id, `Updated category "${existing.name}"`);
+  res.json({ category: plain(await get('SELECT * FROM categories WHERE id = ?', [id])) });
 }));
 
 categoryRouter.delete('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw badRequest('Invalid category id');
-  const existing = plain(get('SELECT * FROM categories WHERE id = ? AND user_id = ?', [id, req.user.id]));
+  const existing = plain(await get('SELECT * FROM categories WHERE id = ? AND user_id = ?', [id, req.user.id]));
   if (!existing) throw notFound('Category not found');
 
-  const inUse = get('SELECT COUNT(*) AS n FROM expenses WHERE category_id = ? AND deleted_at IS NULL', [id])?.n ?? 0;
+  const inUse = (await get('SELECT COUNT(*) AS n FROM expenses WHERE category_id = ? AND deleted_at IS NULL', [id]))?.n ?? 0;
   // Deleting would orphan real history, so archive instead and say so plainly.
   if (inUse > 0) {
-    run('UPDATE categories SET is_archived = 1 WHERE id = ? AND user_id = ?', [id, req.user.id]);
-    audit(req.user.id, 'archive', 'category', id, `Archived category "${existing.name}"`);
+    await run('UPDATE categories SET is_archived = 1 WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    await audit(req.user.id, 'archive', 'category', id, `Archived category "${existing.name}"`);
     return res.json({ ok: true, archived: true, reason: `${inUse} expense(s) use this category, so it was archived rather than deleted.` });
   }
 
-  run('DELETE FROM categories WHERE id = ? AND user_id = ?', [id, req.user.id]);
-  audit(req.user.id, 'delete', 'category', id, `Deleted category "${existing.name}"`);
+  await run('DELETE FROM categories WHERE id = ? AND user_id = ?', [id, req.user.id]);
+  await audit(req.user.id, 'delete', 'category', id, `Deleted category "${existing.name}"`);
   res.json({ ok: true, archived: false });
 }));

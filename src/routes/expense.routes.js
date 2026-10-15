@@ -60,11 +60,11 @@ expenseRouter.get('/', asyncHandler(async (req, res) => {
   }
 
   const whereSql = where.join(' AND ');
-  const total = get(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN e.is_income = 0 THEN e.base_amount_minor ELSE 0 END),0) AS spent,
+  const total = await get(`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN e.is_income = 0 THEN e.base_amount_minor ELSE 0 END),0) AS spent,
                             COALESCE(SUM(CASE WHEN e.is_income = 1 THEN e.base_amount_minor ELSE 0 END),0) AS earned
                      FROM expenses e WHERE ${whereSql}`, params);
 
-  const rows = plainAll(all(
+  const rows = plainAll(await all(
     `SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color, c.kind AS category_kind
      FROM expenses e LEFT JOIN categories c ON c.id = e.category_id
      WHERE ${whereSql} ORDER BY ${SORTS[q.sort]} LIMIT ? OFFSET ?`,
@@ -92,13 +92,13 @@ const WRITE_SCHEMA = {
   spentAt: { type: 'date', default: () => new Date().toISOString() }
 };
 
-function resolveCategory(req, body) {
+async function resolveCategory(req, body) {
   if (body.categoryId) {
-    const cat = get('SELECT id FROM categories WHERE id = ? AND user_id = ?', [body.categoryId, req.user.id]);
+    const cat = await get('SELECT id FROM categories WHERE id = ? AND user_id = ?', [body.categoryId, req.user.id]);
     if (!cat) throw badRequest('That category does not belong to your account');
     return body.categoryId;
   }
-  if (body.category) return resolveCategoryId(req.user.id, body.category, body.isIncome ? 'income' : 'expense');
+  if (body.category) return await resolveCategoryId(req.user.id, body.category, body.isIncome ? 'income' : 'expense');
   return null;
 }
 
@@ -110,9 +110,9 @@ expenseRouter.post('/', asyncHandler(async (req, res) => {
   const currency = (body.currency || req.user.currency).toUpperCase();
   const fxRate = currency === req.user.currency ? 1 : body.fxRate;
   const baseAmountMinor = Math.round(amountMinor * fxRate);
-  const categoryId = resolveCategory(req, body);
+  const categoryId = await resolveCategory(req, body);
 
-  const result = tx(() => run(
+  const result = await tx(async () => await run(
     `INSERT INTO expenses (user_id, category_id, amount_minor, currency, fx_rate, base_amount_minor,
                            merchant, note, payment_method, tags_json, is_income, spent_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -121,15 +121,15 @@ expenseRouter.post('/', asyncHandler(async (req, res) => {
   ));
 
   const id = Number(result.lastInsertRowid);
-  audit(req.user.id, 'create', 'expense', id, `Added ${body.isIncome ? 'income' : 'expense'} of ${body.amount}`, { amountMinor, merchant: body.merchant });
-  const unlocked = evaluateAchievements(req.user.id);
+  await audit(req.user.id, 'create', 'expense', id, `Added ${body.isIncome ? 'income' : 'expense'} of ${body.amount}`, { amountMinor, merchant: body.merchant });
+  const unlocked = await evaluateAchievements(req.user.id);
 
-  const row = plain(get(
+  const row = plain(await get(
     `SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color
      FROM expenses e LEFT JOIN categories c ON c.id = e.category_id WHERE e.id = ?`, [id]));
 
   // Warn about a likely double-entry without blocking the save — the user decides.
-  const recent = liveExpenses(req.user.id, { from: new Date(Date.now() - 3 * 86400000).toISOString(), limit: 60 })
+  const recent = (await liveExpenses(req.user.id, { from: new Date(Date.now() - 3 * 86400000).toISOString(), limit: 60 }))
     .map((r) => ({ id: r.id, amount: r.base_amount_minor, merchant: r.merchant, date: r.spent_at, category: r.category_name }));
   const dupes = findDuplicates(recent).filter((d) => d.duplicate.id === id || d.original.id === id);
 
@@ -139,7 +139,7 @@ expenseRouter.post('/', asyncHandler(async (req, res) => {
 expenseRouter.get('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw badRequest('Invalid expense id');
-  const row = plain(get(
+  const row = plain(await get(
     `SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color
      FROM expenses e LEFT JOIN categories c ON c.id = e.category_id
      WHERE e.id = ? AND e.user_id = ?`, [id, req.user.id]));
@@ -150,7 +150,7 @@ expenseRouter.get('/:id', asyncHandler(async (req, res) => {
 expenseRouter.patch('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw badRequest('Invalid expense id');
-  const existing = plain(get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [id, req.user.id]));
+  const existing = plain(await get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [id, req.user.id]));
   if (!existing) throw notFound('Expense not found');
   if (existing.deleted_at) throw conflict('Restore this expense before editing it');
 
@@ -181,16 +181,16 @@ expenseRouter.patch('/:id', asyncHandler(async (req, res) => {
   if (body.isIncome !== undefined) push('is_income', body.isIncome ? 1 : 0);
   if (body.spentAt !== undefined) push('spent_at', body.spentAt);
   if (body.categoryId !== undefined || body.category !== undefined) {
-    push('category_id', resolveCategory(req, { ...body, isIncome: body.isIncome ?? Boolean(existing.is_income) }));
+    push('category_id', await resolveCategory(req, { ...body, isIncome: body.isIncome ?? Boolean(existing.is_income) }));
   }
   if (!sets.length) throw badRequest('No changes supplied');
 
   sets.push("updated_at = datetime('now')");
   params.push(id, req.user.id);
-  run(`UPDATE expenses SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, params);
-  audit(req.user.id, 'update', 'expense', id, 'Expense edited', { before: { amount_minor: existing.amount_minor, merchant: existing.merchant } });
+  await run(`UPDATE expenses SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, params);
+  await audit(req.user.id, 'update', 'expense', id, 'Expense edited', { before: { amount_minor: existing.amount_minor, merchant: existing.merchant } });
 
-  const row = plain(get(
+  const row = plain(await get(
     `SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color
      FROM expenses e LEFT JOIN categories c ON c.id = e.category_id WHERE e.id = ?`, [id]));
   res.json({ expense: shapeExpense(row) });
@@ -200,23 +200,23 @@ expenseRouter.patch('/:id', asyncHandler(async (req, res) => {
 expenseRouter.delete('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw badRequest('Invalid expense id');
-  const existing = plain(get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [id, req.user.id]));
+  const existing = plain(await get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [id, req.user.id]));
   if (!existing) throw notFound('Expense not found');
   if (existing.deleted_at) return res.json({ ok: true, alreadyDeleted: true });
 
-  run("UPDATE expenses SET deleted_at = datetime('now') WHERE id = ? AND user_id = ?", [id, req.user.id]);
-  audit(req.user.id, 'delete', 'expense', id, `Deleted expense at ${existing.merchant || 'unknown'}`, { amount_minor: existing.amount_minor });
+  await run("UPDATE expenses SET deleted_at = datetime('now') WHERE id = ? AND user_id = ?", [id, req.user.id]);
+  await audit(req.user.id, 'delete', 'expense', id, `Deleted expense at ${existing.merchant || 'unknown'}`, { amount_minor: existing.amount_minor });
   res.json({ ok: true, undoToken: id });
 }));
 
 expenseRouter.post('/:id/restore', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw badRequest('Invalid expense id');
-  const existing = plain(get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [id, req.user.id]));
+  const existing = plain(await get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', [id, req.user.id]));
   if (!existing) throw notFound('Expense not found');
-  run('UPDATE expenses SET deleted_at = NULL WHERE id = ? AND user_id = ?', [id, req.user.id]);
-  audit(req.user.id, 'restore', 'expense', id, 'Expense restored');
-  const row = plain(get(
+  await run('UPDATE expenses SET deleted_at = NULL WHERE id = ? AND user_id = ?', [id, req.user.id]);
+  await audit(req.user.id, 'restore', 'expense', id, 'Expense restored');
+  const row = plain(await get(
     `SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color
      FROM expenses e LEFT JOIN categories c ON c.id = e.category_id WHERE e.id = ?`, [id]));
   res.json({ expense: shapeExpense(row) });
@@ -228,14 +228,14 @@ expenseRouter.post('/parse', asyncHandler(async (req, res) => {
   const parsed = parseExpenseText(text);
 
   // Blend the personal Naive Bayes model with the keyword guess.
-  const history = liveExpenses(req.user.id, { limit: 800 })
+  const history = (await liveExpenses(req.user.id, { limit: 800 }))
     .filter((r) => r.category_name)
     .map((r) => ({ text: `${r.merchant} ${r.note}`, category: r.category_name }));
   const model = trainModel(history);
   const ml = predict(model, text);
 
   const chosen = ml.category || parsed.fields.categoryGuess;
-  const category = chosen ? plain(get('SELECT id, name, icon, color FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [req.user.id, chosen])) : null;
+  const category = chosen ? plain(await get('SELECT id, name, icon, color FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [req.user.id, chosen])) : null;
 
   res.json({
     ...parsed,
@@ -253,18 +253,18 @@ expenseRouter.post('/parse', asyncHandler(async (req, res) => {
 /** Suggests a category for a merchant/note pair as the user types. */
 expenseRouter.post('/suggest-category', asyncHandler(async (req, res) => {
   const { text } = validate(req.body, { text: { type: 'string', required: true, min: 1, max: 200 } });
-  const history = liveExpenses(req.user.id, { limit: 800 })
+  const history = (await liveExpenses(req.user.id, { limit: 800 }))
     .filter((r) => r.category_name)
     .map((r) => ({ text: `${r.merchant} ${r.note}`, category: r.category_name }));
   const prediction = predict(trainModel(history), text);
   const category = prediction.category
-    ? plain(get('SELECT id, name, icon, color FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [req.user.id, prediction.category]))
+    ? plain(await get('SELECT id, name, icon, color FROM categories WHERE user_id = ? AND lower(name) = lower(?)', [req.user.id, prediction.category]))
     : null;
   res.json({ ...prediction, categoryId: category?.id ?? null, icon: category?.icon ?? null, trainedOn: history.length });
 }));
 
 expenseRouter.get('/meta/tags', asyncHandler(async (req, res) => {
-  const rows = liveExpenses(req.user.id, { limit: 5000 });
+  const rows = await liveExpenses(req.user.id, { limit: 5000 });
   const counts = new Map();
   for (const r of rows) for (const t of safeJson(r.tags_json, [])) counts.set(t, (counts.get(t) || 0) + 1);
   res.json({ tags: [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count).slice(0, 50) });

@@ -19,25 +19,25 @@ after(() => {
   }
 });
 
-const count = (table) => get(`SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
+const count = async (table) => (await get(`SELECT COUNT(*) AS n FROM ${table}`))?.n ?? 0;
 
-test('seeding an empty database creates the demo account and history', () => {
-  seed({ reset: false });
-  assert.equal(count('users'), 1);
-  assert.ok(count('expenses') > 400, `expected a full history, got ${count('expenses')}`);
+test('seeding an empty database creates the demo account and history', async () => {
+  await seed({ reset: false });
+  assert.equal(await count('users'), 1);
+  assert.ok(await count('expenses') > 400, `expected a full history, got ${await count('expenses')}`);
 });
 
 // Regression: hosts with ephemeral storage restart often. Seeding on boot must
 // never duplicate data or overwrite a database that already holds accounts.
-test('seeding again with reset:false leaves existing data untouched', () => {
-  const usersBefore = count('users');
-  const expensesBefore = count('expenses');
+test('seeding again with reset:false leaves existing data untouched', async () => {
+  const usersBefore = await count('users');
+  const expensesBefore = await count('expenses');
 
-  seed({ reset: false });
-  seed({ reset: false });
+  await seed({ reset: false });
+  await seed({ reset: false });
 
-  assert.equal(count('users'), usersBefore, 'must not create a second demo account');
-  assert.equal(count('expenses'), expensesBefore, 'must not duplicate expenses');
+  assert.equal(await count('users'), usersBefore, 'must not create a second demo account');
+  assert.equal(await count('expenses'), expensesBefore, 'must not duplicate expenses');
 });
 
 test('SEED_DEMO is strictly opt-in', async () => {
