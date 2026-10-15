@@ -292,7 +292,7 @@ tbody tr:hover .row-actions { opacity: 1; }
 .modal-head h3 { font-size: 1.05rem; font-weight: 700; }
 .modal-head button { margin-left: auto; color: var(--text-dim); font-size: 1.3rem; line-height: 1; }
 .modal-body { padding: 1.4rem; }
-.modal-foot { padding: 1rem 1.4rem; border-top: 1px solid var(--border); display: flex; gap: .6rem; justify-content: flex-end; }
+.modal-foot { padding: 1rem 1.4rem; border-top: 1px solid var(--border); display: flex; gap: .6rem; justify-content: flex-end; flex-wrap: wrap; }
 .modal-wide { max-width: 760px; }
 
 /* ============ Command palette ============ */
